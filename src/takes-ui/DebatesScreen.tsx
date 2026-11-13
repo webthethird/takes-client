@@ -4,9 +4,11 @@
 // card fall back to the classifier's challenge_reason, labelled as an AI hypothesis.
 
 import { useQuery } from '@tanstack/react-query'
+import { routes } from '@warpstack/app-core'
 import { Cast } from '@warpstack/contract'
 import { CastCard, Loading, Message, useColors } from '@warpstack/ui'
-import { FlatList, RefreshControl, Text, View } from 'react-native'
+import { useRouter } from 'expo-router'
+import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 
@@ -41,8 +43,40 @@ const laneLabel = (i: Item) =>
 const sides = (i: Item) => {
   const backing = i.authorStance === 'yes' ? i.yesAuthors : i.noAuthors
   const challenging = i.authorStance === 'yes' ? i.noAuthors : i.yesAuthors
-  if (challenging === 0) return backing > 1 ? `${backing} people on this side · no one has pushed back yet` : 'No one has pushed back yet'
-  return `${backing} ${backing === 1 ? 'person' : 'people'} backing · ${challenging} challenging`
+  return `${backing} backing · ${challenging} challenging`
+}
+
+/**
+ * An unchallenged card ends in an invitation, not a dead end: a reply box whose placeholder is
+ * the other side's argument. It is a pressable, not a text field; it opens the stock composer
+ * as a reply to this cast (which posts from the phone; the web composer opens but is
+ * read-only). The suggestion is AI-written, so it is labelled as such and styled as
+ * placeholder text: it must never read as a real person's reply (classifier README, "Real
+ * disagreement outranks hypothesised disagreement").
+ */
+const ChallengePrompt = ({ item }: { item: Item }) => {
+  const c = useColors()
+  const router = useRouter()
+  // router.push rather than <Link asChild>: Warpstack's ui notes a style array under asChild
+  // reaches the DOM on the web and crashes the page.
+  const open = () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · no challengers yet</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Make the case against this take. Suggested angle: ${item.challengeReason}`}
+        onPress={open}
+        style={({ pressed }) => ({
+          borderColor: pressed ? c.accent : c.border, borderWidth: 1, borderRadius: 12,
+          backgroundColor: c.bg, paddingHorizontal: 14, paddingVertical: 12, gap: 4,
+        })}>
+        <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>💬 Make the case against…</Text>
+        <Text style={{ color: c.muted, fontSize: 14, fontStyle: 'italic' }}>e.g. “{item.challengeReason}”</Text>
+        <Text style={{ color: c.muted, fontSize: 11, marginTop: 2 }}>Suggested by AI · not a real reply</Text>
+      </Pressable>
+    </View>
+  )
 }
 
 const DebateCard = ({ item }: { item: Item }) => {
@@ -65,10 +99,7 @@ const DebateCard = ({ item }: { item: Item }) => {
             </View>
           </>
         ) : (
-          <Text style={{ color: c.muted, fontSize: 14 }}>
-            <Text style={{ fontWeight: '600' }}>AI hypothesis: </Text>
-            {item.challengeReason}
-          </Text>
+          <ChallengePrompt item={item} />
         )}
         <Text style={{ color: c.muted, fontSize: 13 }}>{sides(item)}</Text>
       </View>
