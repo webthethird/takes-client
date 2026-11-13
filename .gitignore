@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.expo/
+ios/
+android/
+*.tsbuildinfo
+
+# Local secrets: never commit these.
+.dev.vars
+.env
+.env.*
+!.env.example
+
+# Wrangler's local state and generated configs.
+.wrangler/
+wrangler.offline.jsonc
+wrangler.deploy.jsonc

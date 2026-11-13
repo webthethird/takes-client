@@ -1,0 +1,22 @@
+# Supply chain: a new dependency is installed only once it is 7 days old, and only these
+# packages may run install scripts.
+minimumReleaseAge: 10080
+# Dependencies of dependencies resolve to what was published by the time the pinned versions
+# were, so Expo's own packages match the SDK the app pins rather than its newest patches.
+resolutionMode: time-based
+minimumReleaseAgeExclude:
+  - "@warpstack/*"
+  # Pinned below to one exact version, already older than 7 days. Time-based resolution would
+  # otherwise measure its age from when the pinned Expo was published and refuse it.
+  - node-forge
+  - undici
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+# Fixes inside Expo's build tools, within the ranges they accept (as in Warpstack's own repo).
+overrides:
+  node-forge: 1.4.2
+  undici: 7.30.1
+allowBuilds:
+  esbuild: true
+  workerd: true
