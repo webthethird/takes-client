@@ -7,7 +7,7 @@
 import { TakesStore, type ScoreRow } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
-  FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, interleave, rankFeed,
+  FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, interleave, rankFeed,
 } from './core/score.ts'
 
 type Fetch = (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>
@@ -34,7 +34,7 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const limit = Number.isSafeInteger(asked) ? Math.min(Math.max(asked, 1), MAX_LIMIT) : DEFAULT_LIMIT
 
   const cfg = takesConfig(env)
-  const store = new TakesStore(env.TAKES, PROMPT_VERSION)
+  const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
   const freshSince = now - FRESH_HOURS * 3600
   const [fresh, old, follows] = await Promise.all([
     store.scores({ since: freshSince, until: now + 1, minBand: 0, limit: FRESH_POOL }),

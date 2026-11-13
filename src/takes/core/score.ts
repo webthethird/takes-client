@@ -11,13 +11,25 @@
 
 import type { Claim, StanceResult } from '../schema.ts'
 
-/** Bump whenever a prompt or the schema changes: older rows then count as unclassified. */
+/**
+ * Stage 1's version: bump when the classify prompt or its schema changes, and stored
+ * classifications count as unclassified. Stage 2 has its own, so a stance-only change
+ * re-runs only stances (the classifier keeps the same split: CLASSIFY_ / STANCE_VERSION).
+ */
 export const PROMPT_VERSION = 'client-3:haiku-5-5' // 3: taste claims people split on score as arguable (classifier 54e4220)
+/** Stage 2's version: bump when the stance prompt, schema or reconciliation changes. */
+export const STANCE_VERSION = 'stance-2:haiku-5-5' // 2: direct replies anchored to stage 1's answer
 
 /* ──────────────────────────── Selection ──────────────────────────────── */
 
-/** The fresh feed: casts from the last this-many hours. */
-export const FRESH_HOURS = 72
+/**
+ * The fresh feed: casts from the last this-many hours, ranked band-first with no recency
+ * preference inside the window beyond a tiebreak (a 6-day-old 0.7 outranks today's 0.6).
+ * A week, so a take people are still arguing over days later stays in the feed. Note a new
+ * deployment can index only ~4 days back: both Snapchain and Hypersnap keep their event
+ * stream that long (measured Nov 13, 2026), and the index is built from events.
+ */
+export const FRESH_HOURS = 168
 /**
  * Resurfacing: older casts that proved highly debatable come back, every RESURFACE_EVERY-th
  * card, with their thread as it stands now. Only casts at RESURFACE_MIN_BAND or above
@@ -91,6 +103,25 @@ export const reconcileStance = (
   const derived = r.agreement === 'agree' ? r.parent_stance : r.parent_stance === 'yes' ? 'no' : 'yes'
   return { stance: derived, corrected: derived !== r.stance }
 }
+
+/**
+ * For a reply directly under the root, the parent's stance IS the root author's answer, and
+ * stage 1 already decided it. Letting stage 2 re-read it independently means the two stages
+ * can disagree about the same cast, and then an agreeing reply shows as "Someone already
+ * disagrees" (seen live: stage 1 stored "no" on a cast arguing "yes"; stage 2 read "yes",
+ * correctly, and the card invented a dispute). So reconciliation is anchored to stage 1's
+ * answer, which keeps every card internally consistent: if stage 1 misread the polarity, the
+ * whole card is misread the same way, and since cards are relative to the cast ("backing" /
+ * "challenging"), readers still see it right.
+ *
+ * The model's own reading is not discarded: `conflict` is true when it named a definite stance
+ * for the root that differs from stage 1's, a measurable signal of stage-1 polarity errors.
+ */
+export const anchorToRoot = <T extends Pick<StanceResult, 'parent_stance'>>(r: T, rootAnswer: 'yes' | 'no'):
+  { anchored: T; conflict: boolean } => ({
+  anchored: { ...r, parent_stance: rootAnswer },
+  conflict: r.parent_stance !== 'none' && r.parent_stance !== rootAnswer,
+})
 
 /* ──────────────────────────── Card scoring ───────────────────────────── */
 

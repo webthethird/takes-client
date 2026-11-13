@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim } from '../schema.ts'
 import {
-  CHALLENGE_BAND, FOLLOWING_CREDIT, chooseClaim, interleave, pickRebuttal, rankFeed, reconcileStance, scoreCard, type ReplyStance,
+  CHALLENGE_BAND, FOLLOWING_CREDIT, anchorToRoot, chooseClaim, interleave, pickRebuttal, rankFeed, reconcileStance, scoreCard, type ReplyStance,
 } from './score.ts'
 
 describe('interleave', () => {
@@ -72,6 +72,34 @@ describe('pickRebuttal', () => {
     const b = reply(3, 'yes', { hash: '0xbb' })
     expect(pickRebuttal(1, 'no', [b, a])).toBe(a)
     expect(pickRebuttal(1, 'no', [a, b])).toBe(a)
+  })
+})
+
+describe('anchorToRoot: a direct reply is judged against stage 1, not a re-reading', () => {
+  // The live case: root argues "security paranoia holds you back" (really YES on "Is distrust
+  // of signer security a hindrance?"), stage 1 stored NO; a reply agrees and stage 2 read the
+  // root as YES. Unanchored, the reply came out YES and showed as a rebuttal to a NO author.
+  const reply = { parent_stance: 'yes' as const, agreement: 'agree' as const, stance: 'yes' as const, explicit_reversal: false }
+
+  it('an agreeing reply lands on the author\'s stored side, so it is never a rebuttal', () => {
+    const { anchored, conflict } = anchorToRoot(reply, 'no')
+    expect(reconcileStance(anchored)).toEqual({ stance: 'no', corrected: true })
+    expect(conflict).toBe(true)
+    expect(pickRebuttal(1, 'no', [{ hash: '0x02', fid: 2, stance: reconcileStance(anchored).stance, confidence: 0.85, textLen: 150 }]))
+      .toBeNull()
+  })
+  it('a disagreeing reply still lands on the other side', () => {
+    const { anchored } = anchorToRoot({ ...reply, agreement: 'disagree' as const, stance: 'no' as const }, 'no')
+    expect(reconcileStance(anchored).stance).toBe('yes')
+  })
+  it('no conflict when the readings match, or the model saw no stance in the root', () => {
+    expect(anchorToRoot(reply, 'yes').conflict).toBe(false)
+    expect(anchorToRoot({ ...reply, parent_stance: 'none' as const }, 'no').conflict).toBe(false)
+  })
+  it('anchoring also decides replies where the model saw no stance in the root', () => {
+    // Without the anchor, parent_stance 'none' defers to the verdict; anchored, agreement decides.
+    const { anchored } = anchorToRoot({ ...reply, parent_stance: 'none' as const, stance: 'yes' as const }, 'no')
+    expect(reconcileStance(anchored).stance).toBe('no')
   })
 })
 

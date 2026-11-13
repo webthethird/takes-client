@@ -14,7 +14,7 @@ export type ScoreRow = {
 }
 
 export class TakesStore {
-  constructor(private readonly db: D1Database, private readonly promptVersion: string) {}
+  constructor(private readonly db: D1Database, private readonly promptVersion: string, private readonly stanceVersion: string) {}
 
   /* Lease: one scoring pass at a time. */
 
@@ -107,7 +107,7 @@ export class TakesStore {
     const { results } = await this.db.prepare(
       `SELECT root_hash, reply_hash, fid, stance, confidence, text_len FROM stances
         WHERE prompt_version = ?1 AND root_hash IN (SELECT value FROM json_each(?2))`,
-    ).bind(this.promptVersion, JSON.stringify(rootHashes.slice(i, i + CHUNK)))
+    ).bind(this.stanceVersion, JSON.stringify(rootHashes.slice(i, i + CHUNK)))
       .all<{ root_hash: string; reply_hash: string; fid: number; stance: Stance; confidence: number; text_len: number }>()
     for (const r of results) {
       const list = out.get(r.root_hash) ?? []
@@ -126,7 +126,7 @@ export class TakesStore {
       `INSERT OR REPLACE INTO stances
          (reply_hash, root_hash, prompt_version, fid, stance, confidence, text_len, corrected, detail, classified_ts)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-    ).bind(s.replyHash, s.rootHash, this.promptVersion, s.fid, s.stance, s.confidence, s.textLen, s.corrected ? 1 : 0,
+    ).bind(s.replyHash, s.rootHash, this.stanceVersion, s.fid, s.stance, s.confidence, s.textLen, s.corrected ? 1 : 0,
       JSON.stringify(s.detail), s.now).run()
   }
 
@@ -153,6 +153,19 @@ export class TakesStore {
          FROM scores WHERE ts >= ?1 AND ts < ?2 AND band >= ?3 ORDER BY band DESC, ts DESC LIMIT ?4`,
     ).bind(opts.since, opts.until, opts.minBand, opts.limit).all<ScoreRow>()
     return results
+  }
+
+  /**
+   * Drops cards with no current-version claim behind them. Scores are only ever upserted, so
+   * without this a cast that stopped being an opinion under a new prompt kept its old card.
+   * After a version bump the feed refills as casts are re-classified.
+   */
+  async pruneStaleScores(): Promise<number> {
+    const r = await this.db.prepare(
+      `DELETE FROM scores WHERE hash NOT IN
+         (SELECT hash FROM classifications WHERE prompt_version = ?1 AND claim IS NOT NULL)`,
+    ).bind(this.promptVersion).run()
+    return r.meta.changes
   }
 
   /** Drops cards whose root is gone from the index (deleted, or pruned past retention). */

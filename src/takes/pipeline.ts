@@ -17,7 +17,8 @@ import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
-  PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, chooseClaim, gatedChallenge, reconcileStance, scoreCard,
+  PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, STANCE_VERSION, anchorToRoot, chooseClaim, gatedChallenge,
+  reconcileStance, scoreCard,
 } from './core/score.ts'
 
 export const FOLLOWS_TTL = 6 * 3600
@@ -67,7 +68,7 @@ export const runScoringPass = async (
   const cfg = takesConfig(env)
   if (!cfg.apiKey && !opts.classifier) return { ...report, skipped: 'ANTHROPIC_API_KEY is not set; scoring is off' }
   const classifier = opts.classifier ?? new ClaudeClassifier(cfg.apiKey!)
-  const store = new TakesStore(env.TAKES, PROMPT_VERSION)
+  const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
   const index = new CastIndex(env.DB)
   const { now } = opts
   if (!(await store.acquire(LEASE, now, LEASE_TTL))) return { ...report, skipped: 'another pass holds the lease' }
@@ -176,8 +177,12 @@ export const runScoringPass = async (
             report.declined++
             await store.putStance({ ...base, stance: 'off_topic', confidence: 0, corrected: false, detail: r })
           } else {
-            const { stance, corrected } = reconcileStance(r, sameAuthor ? { rootStance: root.claim.answer } : undefined)
-            await store.putStance({ ...base, stance, confidence: r.confidence, corrected, detail: r })
+            // A direct reply's parent is the root, whose stance stage 1 already decided.
+            const direct = reply.parentHash === root.hash
+            const { anchored, conflict } = direct ? anchorToRoot(r, root.claim.answer) : { anchored: r, conflict: false }
+            const { stance, corrected } = reconcileStance(anchored, sameAuthor ? { rootStance: root.claim.answer } : undefined)
+            // detail keeps the model's own reading, so root_read_conflict can be counted.
+            await store.putStance({ ...base, stance, confidence: r.confidence, corrected, detail: { ...r, root_read_conflict: conflict } })
           }
           report.stances++
           return 'ok'
@@ -199,7 +204,7 @@ export const runScoringPass = async (
     await store.putScores(live.map(root => ({ root, score: scoreCard(root, root.claim, stances.get(root.hash) ?? []) })), now)
     await store.dropScores(gone)
     report.scored = live.length
-    report.dropped = gone.length
+    report.dropped = gone.length + (await store.pruneStaleScores())
     if (stop) report.stoppedEarly = stop
     return report
   } finally {
