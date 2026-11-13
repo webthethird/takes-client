@@ -24,7 +24,13 @@ export const FOLLOWS_TTL = 6 * 3600
 const LEASE = 'scoring'
 const LEASE_TTL = 10 * 60
 const CONCURRENCY = 4
-const CANDIDATE_LIMIT = 200
+/**
+ * Candidates read per lane per pass, BEFORE dropping already-classified ones. It must exceed
+ * a lane's whole window: an earlier limit of 200 was applied first, so once the newest 200
+ * were classified, older casts never entered the queue (measured: 219 of 490 following-lane
+ * casts classified, then the lane ran dry). 2,000 is a safety cap, not a working size.
+ */
+const CANDIDATE_LIMIT = 2000
 
 export type PassReport = {
   skipped?: string

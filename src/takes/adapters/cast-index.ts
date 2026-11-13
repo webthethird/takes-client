@@ -62,12 +62,16 @@ export class CastIndex {
 
   /** Live casts by hash; missing or deleted ones are simply absent. */
   async byHashes(hashes: readonly string[]): Promise<Map<string, IndexedCast>> {
-    if (hashes.length === 0) return new Map()
-    const { results } = await this.db.prepare(
-      `SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM casts
-        WHERE state = 0 AND hash IN (SELECT value FROM json_each(?1))`,
-    ).bind(JSON.stringify(hashes)).all<Row>()
-    return new Map(results.map(r => [r.hash, toCast(r)]))
+    const out = new Map<string, IndexedCast>()
+    // Chunked so a bound JSON array stays small (~20 KB) however many roots there are.
+    for (let i = 0; i < hashes.length; i += 400) {
+      const { results } = await this.db.prepare(
+        `SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM casts
+          WHERE state = 0 AND hash IN (SELECT value FROM json_each(?1))`,
+      ).bind(JSON.stringify(hashes.slice(i, i + 400))).all<Row>()
+      for (const r of results) out.set(r.hash, toCast(r))
+    }
+    return out
   }
 
   /** A root's thread, breadth by depth, oldest first, bounded in depth and size. */

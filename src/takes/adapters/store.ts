@@ -3,6 +3,9 @@
 import type { Claim } from '../schema.ts'
 import type { CardScore, ReplyStance, Stance } from '../core/score.ts'
 
+/** Hashes per bound JSON array: ~44 bytes each keeps a parameter near 20 KB. */
+const CHUNK = 400
+
 export type OpinionRoot = { hash: string; fid: number; ts: number; claim: Claim; lane: string }
 export type ScoreRow = {
   hash: string; fid: number; ts: number; band: number; credit: number; both_sides: number
@@ -67,11 +70,15 @@ export class TakesStore {
 
   /** Which of these hashes are already classified under the current prompt version. */
   async classified(hashes: readonly string[]): Promise<Set<string>> {
-    if (hashes.length === 0) return new Set()
-    const { results } = await this.db.prepare(
-      'SELECT hash FROM classifications WHERE prompt_version = ?1 AND hash IN (SELECT value FROM json_each(?2))',
-    ).bind(this.promptVersion, JSON.stringify(hashes)).all<{ hash: string }>()
-    return new Set(results.map(r => r.hash))
+    const out = new Set<string>()
+    // Chunked: one bound JSON parameter of thousands of hashes would pass D1's size limits.
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        'SELECT hash FROM classifications WHERE prompt_version = ?1 AND hash IN (SELECT value FROM json_each(?2))',
+      ).bind(this.promptVersion, JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string }>()
+      for (const r of results) out.add(r.hash)
+    }
+    return out
   }
 
   async putClassification(c: {
@@ -96,16 +103,17 @@ export class TakesStore {
 
   async stances(rootHashes: readonly string[]): Promise<Map<string, ReplyStance[]>> {
     const out = new Map<string, ReplyStance[]>()
-    if (rootHashes.length === 0) return out
+    for (let i = 0; i < rootHashes.length; i += CHUNK) {
     const { results } = await this.db.prepare(
       `SELECT root_hash, reply_hash, fid, stance, confidence, text_len FROM stances
         WHERE prompt_version = ?1 AND root_hash IN (SELECT value FROM json_each(?2))`,
-    ).bind(this.promptVersion, JSON.stringify(rootHashes))
+    ).bind(this.promptVersion, JSON.stringify(rootHashes.slice(i, i + CHUNK)))
       .all<{ root_hash: string; reply_hash: string; fid: number; stance: Stance; confidence: number; text_len: number }>()
     for (const r of results) {
       const list = out.get(r.root_hash) ?? []
       list.push({ hash: r.reply_hash, fid: r.fid, stance: r.stance, confidence: r.confidence, textLen: r.text_len })
       out.set(r.root_hash, list)
+    }
     }
     return out
   }
