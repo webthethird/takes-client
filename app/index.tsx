@@ -1,3 +1,4 @@
-import { HomeScreen } from '@warpstack/ui'
+import { DebatesScreen } from '../src/takes-ui/DebatesScreen.tsx'
 
-export default HomeScreen
+// Takes' home is the debate feed; Warpstack's following feed lives at /following.
+export default DebatesScreen

@@ -19,10 +19,17 @@ export const MODEL = 'claude-haiku-5-5'
 export type Declined = { declined: true; reason: string }
 
 export interface Classifier {
-  classifyCast(i: { text: string; parentText?: string }): Promise<ClassifyResult | Declined>
+  classifyCast(i: CastInput): Promise<ClassifyResult | Declined>
   classifyStance(i: { question: string; rootText: string; parentText: string; replyText: string; sameAuthor: boolean }):
     Promise<StanceResult | Declined>
 }
+
+/**
+ * A root cast as the classifier reads it: mentions already rendered. The quoted cast and link
+ * URLs are context, the way the classifier's `<parent>` and `<embedded_link>` tags were: a
+ * quote cast is often a take ON the quoted cast, and is unreadable without it.
+ */
+export type CastInput = { text: string; quoted?: string; links?: readonly string[] }
 
 export const isDeclined = (r: object): r is Declined => 'declined' in r
 
@@ -34,8 +41,12 @@ export class ClaudeClassifier implements Classifier {
     this.client = new Anthropic({ apiKey, timeout: 60_000 })
   }
 
-  async classifyCast(i: { text: string; parentText?: string }): Promise<ClassifyResult | Declined> {
-    const parts = [...(i.parentText ? [`<parent>${i.parentText}</parent>`] : []), `<cast>${i.text}</cast>`]
+  async classifyCast(i: CastInput): Promise<ClassifyResult | Declined> {
+    const parts = [
+      ...(i.quoted ? [`<quoted_cast>${i.quoted}</quoted_cast>`] : []),
+      ...(i.links ?? []).map(u => `<embedded_link>${u}</embedded_link>`),
+      `<cast>${i.text}</cast>`,
+    ]
     const r = await this.client.messages.parse({
       model: MODEL,
       max_tokens: 4096,

@@ -2,11 +2,21 @@
 // schema (node_modules/@warpstack/api/migrations); everything here only SELECTs, and only from
 // casts and cast_counts. If an upgrade changes those tables, this file is what breaks.
 
-export type IndexedCast = { hash: string; fid: number; ts: number; text: string; parentHash: string | null }
+import { parseEmbeds, parseMentions, type Mention } from '../core/text.ts'
+
+export type IndexedCast = {
+  hash: string; fid: number; ts: number; text: string; parentHash: string | null
+  mentions: Mention[]; urls: string[]; quoted: { fid: number; hash: string } | null
+}
 export type Candidate = IndexedCast & { repliers: number; likes: number }
 
-type Row = { hash: string; fid: number; ts: number; text: string; parent_hash: string | null; repliers?: number; likes?: number }
-const toCast = (r: Row): IndexedCast => ({ hash: r.hash, fid: r.fid, ts: r.ts, text: r.text, parentHash: r.parent_hash })
+type Row = {
+  hash: string; fid: number; ts: number; text: string; parent_hash: string | null; mentions: string; embeds: string
+  repliers?: number; likes?: number
+}
+const toCast = (r: Row): IndexedCast => ({
+  hash: r.hash, fid: r.fid, ts: r.ts, text: r.text, parentHash: r.parent_hash, mentions: parseMentions(r.mentions), ...parseEmbeds(r.embeds),
+})
 
 export class CastIndex {
   constructor(private readonly db: D1Database) {}
@@ -15,7 +25,7 @@ export class CastIndex {
   async byAuthors(fids: readonly number[], since: number, minLen: number, limit: number): Promise<IndexedCast[]> {
     if (fids.length === 0) return []
     const { results } = await this.db.prepare(
-      `SELECT hash, fid, ts, text, parent_hash FROM casts
+      `SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM casts
         WHERE reply = 0 AND state = 0 AND ts >= ?1 AND length(text) >= ?3
           AND fid IN (SELECT value FROM json_each(?2))
         ORDER BY ts DESC LIMIT ?4`,
@@ -38,7 +48,7 @@ export class CastIndex {
           WHERE r.state = 0 AND r.ts >= ?1 AND r.fid != c.fid AND c.reply = 0 AND c.ts >= ?1 AND c.ts < ?2
           GROUP BY r.parent_hash
        )
-       SELECT c.hash, c.fid, c.ts, c.text, c.parent_hash,
+       SELECT c.hash, c.fid, c.ts, c.text, c.parent_hash, c.mentions, c.embeds,
               coalesce(rep.repliers, 0) AS repliers, coalesce(k.likes, 0) AS likes
          FROM casts c
          LEFT JOIN rep ON rep.hash = c.hash
@@ -54,7 +64,7 @@ export class CastIndex {
   async byHashes(hashes: readonly string[]): Promise<Map<string, IndexedCast>> {
     if (hashes.length === 0) return new Map()
     const { results } = await this.db.prepare(
-      `SELECT hash, fid, ts, text, parent_hash FROM casts
+      `SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM casts
         WHERE state = 0 AND hash IN (SELECT value FROM json_each(?1))`,
     ).bind(JSON.stringify(hashes)).all<Row>()
     return new Map(results.map(r => [r.hash, toCast(r)]))
@@ -63,14 +73,14 @@ export class CastIndex {
   /** A root's thread, breadth by depth, oldest first, bounded in depth and size. */
   async thread(rootHash: string, maxDepth: number, limit: number): Promise<IndexedCast[]> {
     const { results } = await this.db.prepare(
-      `WITH RECURSIVE t(hash, fid, ts, text, parent_hash, depth) AS (
-         SELECT hash, fid, ts, text, parent_hash, 1 FROM casts WHERE parent_hash = ?1 AND state = 0
+      `WITH RECURSIVE t(hash, fid, ts, text, parent_hash, mentions, embeds, depth) AS (
+         SELECT hash, fid, ts, text, parent_hash, mentions, embeds, 1 FROM casts WHERE parent_hash = ?1 AND state = 0
          UNION ALL
-         SELECT c.hash, c.fid, c.ts, c.text, c.parent_hash, t.depth + 1
+         SELECT c.hash, c.fid, c.ts, c.text, c.parent_hash, c.mentions, c.embeds, t.depth + 1
            FROM casts c JOIN t ON c.parent_hash = t.hash
           WHERE c.state = 0 AND t.depth < ?2
        )
-       SELECT hash, fid, ts, text, parent_hash FROM t ORDER BY ts, hash LIMIT ?3`,
+       SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM t ORDER BY ts, hash LIMIT ?3`,
     ).bind(rootHash, maxDepth, limit).all<Row>()
     return results.map(toCast)
   }

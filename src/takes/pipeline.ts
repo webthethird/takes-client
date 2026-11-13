@@ -14,6 +14,7 @@ import { CastIndex, type IndexedCast } from './adapters/cast-index.ts'
 import { readFollows } from './adapters/node.ts'
 import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
+import { Names } from './names.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
   PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, chooseClaim, gatedChallenge, reconcileStance, scoreCard,
@@ -107,11 +108,18 @@ export const runScoringPass = async (
       }
     }
     const done = await store.classified(queue.map(q => q.cast.hash))
-    const todo = queue.filter(q => !done.has(q.cast.hash))
+    // Only as many as the budget can classify this pass: names and quotes are fetched for these.
+    const todo = queue.filter(q => !done.has(q.cast.hash)).slice(0, budget)
+    const names = new Names(store, env.SNAPCHAIN_URL, now)
+    const quoted = await index.byHashes(todo.flatMap(q => (q.cast.quoted ? [q.cast.quoted.hash] : [])))
+    await names.ensure([...todo.map(q => q.cast), ...quoted.values()])
     await pool(todo.map(({ cast, lane }) => async () => {
       if (!spend()) return 'stop'
       try {
-        const r = await classifier.classifyCast({ text: cast.text })
+        const quote = cast.quoted ? quoted.get(cast.quoted.hash) : undefined
+        const r = await classifier.classifyCast({
+          text: names.render(cast), links: cast.urls, ...(quote ? { quoted: names.render(quote) } : {}),
+        })
         const base = { hash: cast.hash, fid: cast.fid, ts: cast.ts, lane, now }
         if (isDeclined(r)) {
           report.declined++
@@ -144,14 +152,18 @@ export const runScoringPass = async (
       const thread = await index.thread(root.hash, MAX_THREAD_DEPTH, MAX_REPLIES_PER_THREAD)
       const byHash = new Map(thread.map(c => [c.hash, c]))
       const judged = new Set((stances.get(root.hash) ?? []).map(s => s.hash))
-      await pool(thread.filter(r => !judged.has(r.hash)).map(reply => async () => {
+      const pending = thread.filter(r => !judged.has(r.hash))
+      if (pending.length === 0) continue
+      await names.ensure([rootCast, ...thread])
+      const rootText = names.render(rootCast)
+      await pool(pending.map(reply => async () => {
         if (!spend()) return 'stop'
         const parent = reply.parentHash && reply.parentHash !== root.hash ? byHash.get(reply.parentHash) : undefined
         const sameAuthor = reply.fid === root.fid
         try {
           const r = await classifier.classifyStance({
-            question: root.claim.question, rootText: rootCast.text, parentText: (parent ?? rootCast).text,
-            replyText: reply.text, sameAuthor,
+            question: root.claim.question, rootText, parentText: parent ? names.render(parent) : rootText,
+            replyText: names.render(reply), sameAuthor,
           })
           const base = { rootHash: root.hash, replyHash: reply.hash, fid: reply.fid, textLen: reply.text.trim().length, now }
           if (isDeclined(r)) {

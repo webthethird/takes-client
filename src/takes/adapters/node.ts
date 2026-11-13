@@ -44,3 +44,25 @@ export const readFollows = async (nodeUrls: string, fid: number): Promise<Follow
   }
   return { ok: true, fids: [...fids], complete: false }
 }
+
+const UserData = z.object({
+  messages: z.array(z.object({ data: z.object({ userDataBody: z.object({ type: z.string(), value: z.string() }).optional() }) })),
+})
+
+/** The FID's current username: a string, null when it has none, or an error. */
+export const readUsername = async (nodeUrls: string, fid: number): Promise<{ ok: true; name: string | null } | { ok: false; error: string }> => {
+  const node = nodeUrls.split(',')[0]?.trim()
+  if (!node) return { ok: false, error: 'SNAPCHAIN_URL is not set' }
+  const url = new URL('/v1/userDataByFid', node)
+  url.searchParams.set('fid', String(fid))
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8_000) })
+    if (!res.ok) return { ok: false, error: `userDataByFid: ${res.status}` }
+    const parsed = UserData.safeParse(await res.json())
+    if (!parsed.success) return { ok: false, error: 'userDataByFid: unexpected shape' }
+    const name = parsed.data.messages.find(m => m.data.userDataBody?.type === 'USER_DATA_TYPE_USERNAME')?.data.userDataBody?.value
+    return { ok: true, name: name && /^[a-z0-9][a-z0-9.-]{0,63}$/i.test(name) ? name : null }
+  } catch (e) {
+    return { ok: false, error: `userDataByFid: ${String(e)}` }
+  }
+}

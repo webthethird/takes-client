@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": { "jsx": "react-jsx", "types": [] },
-  "include": ["app"]
+  "include": ["app", "src/takes-ui"]
 }

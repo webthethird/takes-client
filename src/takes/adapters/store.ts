@@ -50,6 +50,19 @@ export class TakesStore {
     ])
   }
 
+  /* Names, for rendering mentions */
+
+  async names(fids: readonly number[]): Promise<Map<number, string | null>> {
+    if (fids.length === 0) return new Map()
+    const { results } = await this.db.prepare('SELECT fid, username FROM names WHERE fid IN (SELECT value FROM json_each(?1))')
+      .bind(JSON.stringify(fids)).all<{ fid: number; username: string | null }>()
+    return new Map(results.map(r => [r.fid, r.username]))
+  }
+
+  async putName(fid: number, username: string | null, now: number): Promise<void> {
+    await this.db.prepare('INSERT OR REPLACE INTO names (fid, username, ts) VALUES (?1, ?2, ?3)').bind(fid, username, now).run()
+  }
+
   /* Stage 1 */
 
   /** Which of these hashes are already classified under the current prompt version. */

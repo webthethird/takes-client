@@ -7,12 +7,7 @@ import { StatusBar } from 'expo-status-bar'
 import { Platform, Pressable, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-// The API is served by the same Worker as the web export, so the web uses its own origin.
-// A phone build is pointed at a deployment with EXPO_PUBLIC_API_URL; only a development
-// build falls back to a local Worker, so a release build never quietly talks to localhost.
-const apiUrl = Platform.OS === 'web' && typeof window !== 'undefined'
-  ? window.location.origin
-  : process.env.EXPO_PUBLIC_API_URL ?? (__DEV__ ? 'http://localhost:8787' : null)
+import { apiUrl } from '../src/takes-ui/api-url.ts'
 
 const web = Platform.OS === 'web'
 
@@ -37,9 +32,10 @@ const Nav = () => {
   const link = { color: c.muted, fontSize: 14, paddingVertical: 8 }
   return (
     <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center', paddingRight: 8 }}>
-      <Link href="/" style={link}>Home</Link>
+      <Link href="/" style={link}>Debates</Link>
       {account.kind === 'signedIn' ? (
         <>
+          <Link href="/following" style={link}>Following</Link>
           <Link href={routes.notifications()} style={link}>Notifications</Link>
           <Link href={routes.settings()} style={link}>Settings</Link>
           <Link href={routes.compose()} style={{ ...link, color: c.accent, fontWeight: '600' }}>Post</Link>
@@ -80,6 +76,7 @@ const Shell = () => {
               ...(web ? { headerRight: () => <Nav /> } : {}),
             }}>
             <Stack.Screen name="index" options={{ title: appName }} />
+            <Stack.Screen name="following" options={{ title: 'Following' }} />
             <Stack.Screen name="channel/[key]" options={{ title: 'Channel' }} />
             <Stack.Screen name="cast/[fid]/[hash]" options={{ title: 'Thread' }} />
             <Stack.Screen name="profile/[fid]" options={{ title: 'Profile' }} />
