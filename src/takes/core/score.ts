@@ -12,7 +12,7 @@
 import type { Claim, StanceResult } from '../schema.ts'
 
 /** Bump whenever a prompt or the schema changes: older rows then count as unclassified. */
-export const PROMPT_VERSION = 'client-2:haiku-5-5' // 2: mentions rendered, quoted casts and links as context
+export const PROMPT_VERSION = 'client-3:haiku-5-5' // 3: taste claims people split on score as arguable (classifier 54e4220)
 
 /* ──────────────────────────── Selection ──────────────────────────────── */
 

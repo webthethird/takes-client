@@ -6,6 +6,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json",
     "test": "vitest run",
+    "classify": "node --env-file=.dev.vars scripts/classify.mts",
+    "eval-stakes": "node --env-file=.dev.vars scripts/eval-stakes.mts",
     "start": "expo start",
     "web": "expo start --web",
     "ios": "warpstack-vault-build && expo run:ios --device",
