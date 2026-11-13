@@ -21,6 +21,13 @@
       // Replaced by `wrangler d1 create` output before the first deploy.
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "node_modules/@warpstack/api/migrations"
+    },
+    {
+      // Takes' scores and classifications: derived state, kept apart from Warpstack's index.
+      "binding": "TAKES",
+      "database_name": "takes-client-scores",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations-takes"
     }
   ],
   "durable_objects": {
