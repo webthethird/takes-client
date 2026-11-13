@@ -47,34 +47,64 @@ const sides = (i: Item) => {
 }
 
 /**
- * An unchallenged card ends in an invitation, not a dead end: a reply box whose placeholder is
- * the other side's argument. It is a pressable, not a text field; it opens the stock composer
- * as a reply to this cast (which posts from the phone; the web composer opens but is
- * read-only). The suggestion is AI-written, so it is labelled as such and styled as
- * placeholder text: it must never read as a real person's reply (classifier README, "Real
- * disagreement outranks hypothesised disagreement").
+ * One side's reply box. A pressable, not a text field: it opens the stock composer as a reply
+ * to the cast (which posts from the phone; the web composer opens but is read-only).
  */
-const ChallengePrompt = ({ item }: { item: Item }) => {
+const SideBox = ({ title, count, hint, aiHint, onPress }: {
+  title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
+}) => {
+  const c = useColors()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. ${count}. ${aiHint ? 'AI-suggested angle: ' : ''}${hint}`}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexGrow: 1, flexBasis: 150, borderColor: pressed ? c.accent : c.border, borderWidth: 1, borderRadius: 12,
+        backgroundColor: c.bg, paddingHorizontal: 12, paddingVertical: 10, gap: 4,
+      })}>
+      <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
+      <Text style={{ color: c.muted, fontSize: 12 }}>{count}</Text>
+      <Text style={{ color: c.muted, fontSize: 14, fontStyle: 'italic', marginTop: 2 }}>{hint}</Text>
+      {aiHint && <Text style={{ color: c.muted, fontSize: 11 }}>Suggested by AI · not a real reply</Text>}
+    </Pressable>
+  )
+}
+
+/**
+ * An unchallenged card ends in an invitation to either side, not a dead end and not only to
+ * dissent: two equal reply boxes, side by side (stacked on narrow screens). The challenge box
+ * carries the classifier's AI-written challenge_reason, labelled as such and styled as
+ * placeholder text, so it never reads as a real person's reply (classifier README, "Real
+ * disagreement outranks hypothesised disagreement"). Stage 1 writes no argument for the
+ * backing side, so that box asks rather than inventing one.
+ */
+const SidePrompt = ({ item }: { item: Item }) => {
   const c = useColors()
   const router = useRouter()
+  const backing = item.authorStance === 'yes' ? item.yesAuthors : item.noAuthors
   // router.push rather than <Link asChild>: Warpstack's ui notes a style array under asChild
   // reaches the DOM on the web and crashes the page.
-  const open = () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
+  const reply = () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · no challengers yet</Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Make the case against this take. Suggested angle: ${item.challengeReason}`}
-        onPress={open}
-        style={({ pressed }) => ({
-          borderColor: pressed ? c.accent : c.border, borderWidth: 1, borderRadius: 12,
-          backgroundColor: c.bg, paddingHorizontal: 14, paddingVertical: 12, gap: 4,
-        })}>
-        <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>💬 Make the case against…</Text>
-        <Text style={{ color: c.muted, fontSize: 14, fontStyle: 'italic' }}>e.g. “{item.challengeReason}”</Text>
-        <Text style={{ color: c.muted, fontSize: 11, marginTop: 2 }}>Suggested by AI · not a real reply</Text>
-      </Pressable>
+      <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <SideBox
+          title="Back this take"
+          count={`${backing} ${backing === 1 ? 'person' : 'people'} so far`}
+          hint="What makes them right?"
+          aiHint={false}
+          onPress={reply}
+        />
+        <SideBox
+          title="Challenge it"
+          count="No one yet · be the first"
+          hint={`e.g. “${item.challengeReason}”`}
+          aiHint
+          onPress={reply}
+        />
+      </View>
     </View>
   )
 }
@@ -99,9 +129,10 @@ const DebateCard = ({ item }: { item: Item }) => {
             </View>
           </>
         ) : (
-          <ChallengePrompt item={item} />
+          <SidePrompt item={item} />
         )}
-        <Text style={{ color: c.muted, fontSize: 13 }}>{sides(item)}</Text>
+        {/* The side boxes carry their own counts. */}
+        {item.rebuttal && <Text style={{ color: c.muted, fontSize: 13 }}>{sides(item)}</Text>}
       </View>
     </View>
   )
