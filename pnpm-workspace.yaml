@@ -20,3 +20,5 @@ overrides:
 allowBuilds:
   esbuild: true
   workerd: true
+patchedDependencies:
+  '@warpstack/ui@0.1.0': patches/@warpstack__ui@0.1.0.patch

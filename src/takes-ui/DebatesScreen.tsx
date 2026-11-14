@@ -6,12 +6,14 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { routes } from '@warpstack/app-core'
 import { Cast } from '@warpstack/contract'
-import { CastCard, Loading, Message, useColors } from '@warpstack/ui'
+import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
-import { useMemo } from 'react'
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, Text, View } from 'react-native'
+import { useMemo, type ReactNode } from 'react'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
+import { collapseFor } from './collapse.ts'
+import { opposite, SIDE_PALETTES, type Side } from './side-palette.ts'
 
 const Item = z.object({
   cast: Cast,
@@ -55,18 +57,18 @@ const sides = (i: Item) => {
  * One side's reply box. A pressable, not a text field: it opens the stock composer as a reply
  * to the cast (which posts from the phone; the web composer opens but is read-only).
  */
-const SideBox = ({ title, count, hint, aiHint, onPress }: {
-  title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
+const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
+  side: Side; title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
 }) => {
-  const c = useColors()
+  const c = SIDE_PALETTES[side]
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${count}. ${aiHint ? 'AI-suggested angle: ' : ''}${hint}`}
       onPress={onPress}
       style={({ pressed }) => ({
-        flexGrow: 1, flexBasis: 150, borderColor: pressed ? c.accent : c.border, borderWidth: 1, borderRadius: 12,
-        backgroundColor: c.bg, paddingHorizontal: 12, paddingVertical: 10, gap: 4,
+        flexGrow: 1, flexBasis: 150, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 12,
+        backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 12, paddingVertical: 10, gap: 4,
       })}>
       <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
       <Text style={{ color: c.muted, fontSize: 12 }}>{count}</Text>
@@ -99,6 +101,7 @@ const SidePrompt = ({ item }: { item: Item }) => {
         {/* Each side shows an AI reply in the cast's own voice when one exists. Until then the
             back box asks and the challenge box falls back to stage 1's challenge_reason. */}
         <SideBox
+          side={item.authorStance}
           title="Back this take"
           count={`${backing} ${backing === 1 ? 'person' : 'people'} so far`}
           hint={item.backSuggestion ? `e.g. “${item.backSuggestion}”` : 'What makes them right?'}
@@ -106,6 +109,7 @@ const SidePrompt = ({ item }: { item: Item }) => {
           onPress={reply}
         />
         <SideBox
+          side={opposite(item.authorStance)}
           title="Challenge it"
           count="No one yet · be the first"
           hint={`e.g. “${item.challengeSuggestion ?? item.challengeReason}”`}
@@ -117,6 +121,21 @@ const SidePrompt = ({ item }: { item: Item }) => {
   )
 }
 
+/**
+ * A cast in its side's colors: the stock CastCard, rendered with that side's palette. The
+ * card's own bottom hairline is tucked under the frame's border.
+ */
+const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => (
+  <ColorsOverride.Provider value={SIDE_PALETTES[side]}>
+    <View style={{
+      marginHorizontal: 16, marginVertical: 8, borderRadius: 12, borderWidth: 1, overflow: 'hidden',
+      borderColor: SIDE_PALETTES.no.border, backgroundColor: SIDE_PALETTES[side].bg,
+    }}>
+      <View style={{ marginBottom: -StyleSheet.hairlineWidth }}>{children}</View>
+    </View>
+  </ColorsOverride.Provider>
+)
+
 const DebateCard = ({ item }: { item: Item }) => {
   const c = useColors()
   return (
@@ -127,13 +146,13 @@ const DebateCard = ({ item }: { item: Item }) => {
         </Text>
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
       </View>
-      <CastCard cast={item.cast} />
+      <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance)} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>
         {item.rebuttal ? (
           <>
             <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>Someone already disagrees</Text>
-            <View style={{ borderLeftColor: c.border, borderLeftWidth: 3 }}>
-              <CastCard cast={item.rebuttal} />
+            <View style={{ marginHorizontal: -16 }}>
+              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance))} /></SideFrame>
             </View>
           </>
         ) : (
