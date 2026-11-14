@@ -189,6 +189,37 @@ export class TakesStore {
     ).bind(m.castHash, m.marketId, m.mergeVersion, m.answer, m.via, m.similarity, m.detail === undefined ? null : JSON.stringify(m.detail), m.now, m.embedding).run()
   }
 
+  /* Suggest: one reply per side, in the cast's voice */
+
+  /** Which of these roots already have suggestions under `version`. */
+  async suggested(hashes: readonly string[], version: string): Promise<Set<string>> {
+    const out = new Set<string>()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        'SELECT hash FROM suggestions WHERE version = ?1 AND hash IN (SELECT value FROM json_each(?2))',
+      ).bind(version, JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string }>()
+      for (const r of results) out.add(r.hash)
+    }
+    return out
+  }
+
+  async putSuggestion(s: { hash: string; version: string; back: string; challenge: string; register: string; now: number }): Promise<void> {
+    await this.db.prepare(
+      'INSERT OR REPLACE INTO suggestions (hash, version, back, challenge, register, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+    ).bind(s.hash, s.version, s.back, s.challenge, s.register, s.now).run()
+  }
+
+  async suggestionsFor(hashes: readonly string[], version: string): Promise<Map<string, { back: string; challenge: string }>> {
+    const out = new Map<string, { back: string; challenge: string }>()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        'SELECT hash, back, challenge FROM suggestions WHERE version = ?1 AND hash IN (SELECT value FROM json_each(?2))',
+      ).bind(version, JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string; back: string; challenge: string }>()
+      for (const r of results) out.set(r.hash, { back: r.back, challenge: r.challenge })
+    }
+    return out
+  }
+
   /* Stage 2 */
 
   async stances(rootHashes: readonly string[]): Promise<Map<string, ReplyStance[]>> {

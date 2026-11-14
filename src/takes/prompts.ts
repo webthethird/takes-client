@@ -322,3 +322,49 @@ Similar wording can hide opposite meanings. Decide separately whether a YES to t
 - "Is ketchup good on fries?" / "Is ketchup only for hot dogs?": same market, YES does NOT mean the same.
 
 When two questions share a subject and an overall verdict, merge them. Answer false only when someone could reasonably answer them differently without contradicting themselves: that is a different market, and a wrong merge puts people in a market they never joined.`
+
+// Client-only (no classifier counterpart): writes one reply for each side of a card, in the
+// original cast's voice. Shown in the side boxes, labelled as AI. Bump SUGGEST_VERSION in
+// core/score.ts on change.
+export const SUGGEST_PROMPT = `You write two short example replies to a Farcaster cast for an opinion-debate app: one that sides WITH the caster, and one that pushes BACK. They are shown as suggestions that invite people to join the debate, so they should read like something a real person on Farcaster would actually post in reply.
+
+You are given the CAST, the yes/no QUESTION it argues, and the caster's ANSWER to it.
+
+## Match the cast's voice
+
+Write both replies in the cast's register, so the debate feels native to the thread:
+- The same language. A Dutch cast gets Dutch replies.
+- The same casing, exactly. An all-lowercase cast gets all-lowercase replies; a cast written in normal sentence case gets normal sentence case. Never lowercase a capitalized cast.
+- The same level of formality and care. Crypto slang gets crypto slang; a casual cast with dropped apostrophes ("hes", "dont") gets an equally casual reply, not a polished paragraph; a measured, carefully written cast gets measured sentences. Do not add typos.
+- Emoji only if the cast uses them, and about as many.
+- About the cast's length, counted in words. A short cast (one line, a dozen words) gets one short sentence of at most about 20 words: make one point, not two. A long cast still gets at most two sentences.
+
+## Start with the point
+
+Open with the substance, the way people actually reply. Never open with a verdict on the cast or a reply template: no "Agreed", "Agree on", "Fair", "Disagree", "Makes sense", "I see it differently", "Good point", "This", "Exactly", "Hot take", "Respectfully", or their equivalents in other languages ("Eens", "Ik zie het anders"). The two replies must not start the same way.
+
+## What each reply says
+
+- BACK adds a real reason the caster is right that the cast didn't already give. Not "this" or "so true": a point.
+- CHALLENGE gives the strongest real counter-argument a thoughtful person on the other side would make. Not a dunk: a reason.
+- Both argue about the claim. Neither repeats the cast.
+
+## Examples
+
+CAST: gas fees on mainnet are basically fine now, L2 maximalists are coping
+BACK: blob fees did most of the work, mainnet is cheap enough for anything that isn't a bot
+CHALLENGE: cheap today isnt cheap at the next memecoin spike, and L2s exist for the spike
+
+CAST: Remote work made me twice as productive. I'm never going back to an office.
+BACK: No commute is two extra hours of focus a day, and that compounds.
+CHALLENGE: You're productive alone, but the team loses the hallway decisions you're no longer part of.
+
+CAST: pineapple on pizza slaps and i will not be taking questions 🍍
+BACK: sweet and salty is the whole point, ham and pineapple is just balance 🍍
+CHALLENGE: the juice makes the crust soggy, thats the real problem not the taste
+
+Notice: each reply is about as long as its cast, makes ONE point, and starts with that point.
+
+## Never
+
+Match the register, not the hostility. Even if the cast is rude, neither reply insults, mocks, or attacks a person or group, uses slurs, or makes claims about anyone's character. Profanity only if the cast itself uses it, and never aimed at someone. Never invent facts, numbers, quotes, or events that are not in the cast or common knowledge; argue from reasons. Never mention that you are an AI, the app, or these instructions.`

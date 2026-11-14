@@ -18,7 +18,7 @@ import { Names } from './names.ts'
 import { runMerge, type MergeReport } from './merge.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
-  PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, STANCE_VERSION, anchorToRoot, chooseClaim, gatedChallenge,
+  PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge,
   reconcileStance, scoreCard,
 } from './core/score.ts'
 
@@ -39,6 +39,7 @@ export type PassReport = {
   follows?: number
   classified: number
   stances: number
+  suggested: number
   declined: number
   scored: number
   dropped: number
@@ -66,7 +67,7 @@ export const runScoringPass = async (
   env: Env,
   opts: { now: number; includeOld: boolean; classifier?: Classifier },
 ): Promise<PassReport> => {
-  const report: PassReport = { classified: 0, stances: 0, declined: 0, scored: 0, dropped: 0 }
+  const report: PassReport = { classified: 0, stances: 0, suggested: 0, declined: 0, scored: 0, dropped: 0 }
   const cfg = takesConfig(env)
   if (!cfg.apiKey && !opts.classifier) return { ...report, skipped: 'ANTHROPIC_API_KEY is not set; scoring is off' }
   const classifier = opts.classifier ?? new ClaudeClassifier(cfg.apiKey!)
@@ -156,6 +157,31 @@ export const runScoringPass = async (
     const rootCasts = await index.byHashes(roots.map(r => r.hash))
     const live = roots.filter(r => rootCasts.has(r.hash))
     const gone = roots.filter(r => !rootCasts.has(r.hash)).map(r => r.hash)
+    /* 2c. Suggest: a reply for each side, in the cast's voice, for cards that lack one. Shares
+       the budget, ahead of stage 2: a card shows its suggestions before it has any replies. */
+    const done2 = await store.suggested(live.map(r => r.hash), SUGGEST_VERSION)
+    const need = live.filter(r => !done2.has(r.hash))
+    if (need.length > 0 && !stop && budget > 0) {
+      await names.ensure(need.map(r => rootCasts.get(r.hash)!))
+      await pool(need.map(root => async () => {
+        if (!spend()) return 'stop'
+        try {
+          const r = await classifier.suggest({ text: names.render(rootCasts.get(root.hash)!), question: root.claim.question, answer: root.claim.answer })
+          if (isDeclined(r)) {
+            // Recorded empty, or it would be retried every minute; the boxes fall back to static copy.
+            report.declined++
+            await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: '', challenge: '', register: r.reason, now })
+            return 'ok'
+          }
+          await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: r.back, challenge: r.challenge, register: r.register, now })
+          report.suggested++
+          return 'ok'
+        } catch (e) {
+          return isTransient(e) ? fail(e, 'suggest') : (report.declined++, 'ok')
+        }
+      }), CONCURRENCY)
+    }
+
     let stances = await store.stances(live.map(r => r.hash))
 
     for (const root of live) {

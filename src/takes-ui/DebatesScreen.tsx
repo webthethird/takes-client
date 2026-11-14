@@ -18,6 +18,9 @@ const Item = z.object({
   rebuttal: Cast.nullable(),
   question: z.string(),
   challengeReason: z.string(),
+  /** AI-written replies for each side, in the cast's voice; null until written (or declined). */
+  backSuggestion: z.string().nullable(),
+  challengeSuggestion: z.string().nullable(),
   authorStance: z.enum(['yes', 'no']),
   bothSides: z.boolean(),
   yesAuthors: z.number().int().nonnegative(),
@@ -78,8 +81,9 @@ const SideBox = ({ title, count, hint, aiHint, onPress }: {
  * dissent: two equal reply boxes, side by side (stacked on narrow screens). The challenge box
  * carries the classifier's AI-written challenge_reason, labelled as such and styled as
  * placeholder text, so it never reads as a real person's reply (classifier README, "Real
- * disagreement outranks hypothesised disagreement"). Stage 1 writes no argument for the
- * backing side, so that box asks rather than inventing one.
+ * disagreement outranks hypothesised disagreement"). The suggest stage writes one reply per
+ * side in the cast's own voice; until it has, the back box asks and the challenge box shows
+ * stage 1's challenge_reason.
  */
 const SidePrompt = ({ item }: { item: Item }) => {
   const c = useColors()
@@ -92,17 +96,19 @@ const SidePrompt = ({ item }: { item: Item }) => {
     <View style={{ gap: 8 }}>
       <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {/* Each side shows an AI reply in the cast's own voice when one exists. Until then the
+            back box asks and the challenge box falls back to stage 1's challenge_reason. */}
         <SideBox
           title="Back this take"
           count={`${backing} ${backing === 1 ? 'person' : 'people'} so far`}
-          hint="What makes them right?"
-          aiHint={false}
+          hint={item.backSuggestion ? `e.g. “${item.backSuggestion}”` : 'What makes them right?'}
+          aiHint={item.backSuggestion !== null}
           onPress={reply}
         />
         <SideBox
           title="Challenge it"
           count="No one yet · be the first"
-          hint={`e.g. “${item.challengeReason}”`}
+          hint={`e.g. “${item.challengeSuggestion ?? item.challengeReason}”`}
           aiHint
           onPress={reply}
         />

@@ -146,3 +146,26 @@ export const MarketVerdict = z.object({
     ),
 });
 export type MarketVerdict = z.infer<typeof MarketVerdict>;
+
+// ── Suggest: a reply for each side, in the cast's own voice (client-only) ──
+//
+// Field order is load-bearing: the register is described before either reply is written.
+
+export const Suggestions = z.object({
+  register: z
+    .string()
+    .describe(
+      "A few words on the cast's voice: language, casing, punctuation, slang, emoji, length, and how heated it is. E.g. 'lowercase, terse, crypto slang, one emoji, playful' or 'Dutch, formal, long sentences, measured'.",
+    ),
+  back: z
+    .string()
+    .describe(
+      "A reply that sides WITH the cast, written in that register: a real reason they are right that the cast didn't already give.",
+    ),
+  challenge: z
+    .string()
+    .describe(
+      "A reply that pushes BACK on the cast, written in that register: the strongest real counter-argument, aimed at the claim, never at the person.",
+    ),
+});
+export type Suggestions = z.infer<typeof Suggestions>;

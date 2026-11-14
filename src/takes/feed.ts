@@ -13,7 +13,7 @@ import { TakesStore } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
   FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
-  encodeCursor, interleaveFrom, rankFeed, type FeedCursor,
+  encodeCursor, interleaveFrom, rankFeed, SUGGEST_VERSION, type FeedCursor,
 } from './core/score.ts'
 
 type Fetch = (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>
@@ -93,12 +93,16 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   }
   const exhausted = next.f >= freshRanked.length && next.o >= oldRanked.length
 
+  // An empty suggestion was declined: sent as null so the boxes fall back to static copy.
+  const suggestions = await store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION)
   const items = kept
     .map(({ row, resurfaced, cast, rebuttal }) => ({
       cast,
       rebuttal: rebuttal === 'unauthorized' ? null : rebuttal,
       question: row.question,
       challengeReason: row.challenge_reason,
+      backSuggestion: suggestions.get(row.hash)?.back || null,
+      challengeSuggestion: suggestions.get(row.hash)?.challenge || null,
       authorStance: row.author_stance,
       bothSides: row.both_sides === 1,
       yesAuthors: row.yes_authors,
