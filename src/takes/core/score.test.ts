@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim } from '../schema.ts'
 import {
-  CHALLENGE_BAND, FOLLOWING_CREDIT, anchorToRoot, chooseClaim, interleave, pickRebuttal, rankFeed, reconcileStance, scoreCard, type ReplyStance,
+  CHALLENGE_BAND, FOLLOWING_CREDIT, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, interleave, interleaveFrom, pickRebuttal, rankFeed, reconcileStance, scoreCard, type ReplyStance,
 } from './score.ts'
+
+describe('interleaveFrom: pages resume the same sequence', () => {
+  const fresh = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
+  const old = ['o1', 'o2']
+  it('any page split concatenates to the unpaged feed', () => {
+    const whole = interleave(fresh, old, 4)
+    for (const size of [1, 2, 3, 5, 7]) {
+      const got: string[] = []
+      let at = { f: 0, o: 0 }
+      for (;;) {
+        const page = interleaveFrom(fresh, old, 4, at, size)
+        if (page.length === 0) break
+        got.push(...page.map(e => e.item))
+        at = page[page.length - 1]!.after
+      }
+      expect(got).toEqual(whole)
+    }
+  })
+  it('marks resurfaced rows and reports the cursor past each', () => {
+    const page = interleaveFrom(fresh, old, 4, { f: 3, o: 0 }, 2)
+    expect(page.map(e => [e.item, e.resurfaced])).toEqual([['o1', true], ['f4', false]])
+    expect(page[1]!.after).toEqual({ f: 4, o: 1 })
+  })
+})
+
+describe('feed cursors', () => {
+  it('round-trips, starts at the top when absent, and rejects junk', () => {
+    expect(decodeCursor(encodeCursor({ f: 12, o: 3 }))).toEqual({ f: 12, o: 3 })
+    expect(decodeCursor(null)).toEqual({ f: 0, o: 0 })
+    expect(decodeCursor('12')).toBeNull()
+    expect(decodeCursor('-1.0')).toBeNull()
+    expect(decodeCursor('1.2.3')).toBeNull()
+  })
+})
 
 describe('interleave', () => {
   it('puts a resurfaced card in every n-th slot', () => {

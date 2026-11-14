@@ -205,17 +205,40 @@ export const rankFeed = <T extends { fid: number; band: number; credit: number; 
     .sort((a, b) => b.key - a.key || b.ts - a.ts || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
 
 /**
- * Merges the fresh feed with resurfaced cards: every `every`-th slot (1-based) takes the next
- * resurfaced card while any remain; when either list runs out, the other fills the rest.
+ * A position in the merged feed: how many fresh and how many resurfaced rows have been
+ * consumed. Counting rows consumed, not cards returned, means a row skipped at hydration (its
+ * cast was deleted) still advances the cursor.
  */
-export const interleave = <T>(fresh: readonly T[], old: readonly T[], every: number): T[] => {
-  const out: T[] = []
-  let f = 0
-  let o = 0
-  while (f < fresh.length || o < old.length) {
-    const slotForOld = (out.length + 1) % every === 0
-    if ((slotForOld && o < old.length) || f >= fresh.length) out.push(old[o++]!)
-    else out.push(fresh[f++]!)
+export type FeedCursor = { f: number; o: number }
+export const FEED_START: FeedCursor = { f: 0, o: 0 }
+
+/**
+ * Merges the fresh feed with resurfaced cards, resumably: every `every`-th slot (1-based,
+ * counted from the very start of the feed) takes the next resurfaced card while any remain;
+ * when either list runs out, the other fills the rest. Each entry carries the cursor just
+ * past it, so a page can stop anywhere and the next one continues the same sequence.
+ */
+export const interleaveFrom = <T>(fresh: readonly T[], old: readonly T[], every: number, at: FeedCursor, take: number):
+  Array<{ item: T; resurfaced: boolean; after: FeedCursor }> => {
+  const out: Array<{ item: T; resurfaced: boolean; after: FeedCursor }> = []
+  let { f, o } = at
+  while (out.length < take && (f < fresh.length || o < old.length)) {
+    const slotForOld = (f + o + 1) % every === 0
+    const fromOld = (slotForOld && o < old.length) || f >= fresh.length
+    const item = fromOld ? old[o++]! : fresh[f++]!
+    out.push({ item, resurfaced: fromOld, after: { f, o } })
   }
   return out
+}
+
+/** The whole merged feed from the start. */
+export const interleave = <T>(fresh: readonly T[], old: readonly T[], every: number): T[] =>
+  interleaveFrom(fresh, old, every, FEED_START, Infinity).map(e => e.item)
+
+/** Cursors travel as "f.o": opaque to clients, trivially validated here. */
+export const encodeCursor = (c: FeedCursor): string => `${c.f}.${c.o}`
+export const decodeCursor = (s: string | null): FeedCursor | null => {
+  if (s === null || s === '') return FEED_START
+  const m = /^(\d{1,6})\.(\d{1,6})$/.exec(s)
+  return m ? { f: Number(m[1]), o: Number(m[2]) } : null
 }

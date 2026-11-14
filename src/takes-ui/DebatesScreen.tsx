@@ -3,12 +3,13 @@
 // A real rebuttal from someone else is shown as evidence; only when there is none does the
 // card fall back to the classifier's challenge_reason, labelled as an AI hypothesis.
 
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { routes } from '@warpstack/app-core'
 import { Cast } from '@warpstack/contract'
 import { CastCard, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native'
+import { useMemo } from 'react'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, Text, View } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 
@@ -26,10 +27,11 @@ const Item = z.object({
   resurfaced: z.boolean(),
 })
 type Item = z.infer<typeof Item>
-const Feed = z.object({ items: z.array(Item), viewerFid: z.number().nullable() })
+const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
 
-const fetchFeed = async (): Promise<z.infer<typeof Feed>> => {
-  const res = await fetch(`${apiUrl}/api/takes/feed`, { headers: { accept: 'application/json' } })
+const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> => {
+  const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`${apiUrl}/api/takes/feed${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 401) throw new Error('This server is private. Sign in on the phone app to see the feed.')
   if (!res.ok) throw new Error(`The feed did not load (${res.status}).`)
   // Parsed at the boundary: a malformed card fails loudly instead of rendering half a cast.
@@ -138,17 +140,53 @@ const DebateCard = ({ item }: { item: Item }) => {
   )
 }
 
+/** Pages after the first: a spinner while loading, a retry after a failure, nothing at the end. */
+const Footer = ({ loading, error, retry }: { loading: boolean; error: Error | null; retry: () => void }) => {
+  const c = useColors()
+  if (loading) return <View style={{ padding: 16 }}><ActivityIndicator color={c.muted} /></View>
+  if (!error) return null
+  return (
+    <Pressable accessibilityRole="button" onPress={retry} style={{ padding: 16, alignItems: 'center' }}>
+      <Text style={{ color: c.muted, fontSize: 14 }}>{error.message} Tap to retry.</Text>
+    </Pressable>
+  )
+}
+
 export const DebatesScreen = () => {
   const c = useColors()
-  const feed = useQuery({ queryKey: ['takes', 'feed'], queryFn: fetchFeed, staleTime: 30_000 })
+  const feed = useInfiniteQuery({
+    queryKey: ['takes', 'feed'],
+    queryFn: ({ pageParam }) => fetchFeed(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: last => last.next,
+    staleTime: 30_000,
+  })
+  // The ranking is live, so a card can move across a page boundary between requests and come
+  // back on a later page: drop repeats, keeping each card where it was first shown.
+  const items = useMemo(() => {
+    const seen = new Set<string>()
+    return (feed.data?.pages ?? []).flatMap(p => p.items).filter(i => !seen.has(i.cast.hash) && (seen.add(i.cast.hash), true))
+  }, [feed.data])
   if (feed.isPending) return <Loading />
-  if (feed.isError) return <Message tone="danger">{feed.error.message}</Message>
+  if (feed.isError && items.length === 0) return <Message tone="danger">{feed.error.message}</Message>
+  const more = () => { if (feed.hasNextPage && !feed.isFetchingNextPage && !feed.isFetchNextPageError) void feed.fetchNextPage() }
   return (
     <FlatList
-      data={feed.data.items}
+      data={items}
       keyExtractor={i => i.cast.hash}
       renderItem={({ item }) => <DebateCard item={item} />}
-      refreshControl={<RefreshControl refreshing={feed.isRefetching} onRefresh={() => void feed.refetch()} tintColor={c.muted} />}
+      onEndReached={more}
+      onEndReachedThreshold={0.6}
+      ListFooterComponent={
+        <Footer
+          loading={feed.isFetchingNextPage}
+          error={feed.isFetchNextPageError ? feed.error : null}
+          retry={() => void feed.fetchNextPage()}
+        />
+      }
+      refreshControl={
+        <RefreshControl refreshing={feed.isRefetching && !feed.isFetchingNextPage} onRefresh={() => void feed.refetch()} tintColor={c.muted} />
+      }
       ListEmptyComponent={
         <Message>Nothing debatable yet. Takes classifies new casts every minute; check back shortly.</Message>
       }
