@@ -136,6 +136,29 @@ const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => (
   </ColorsOverride.Provider>
 )
 
+const authorName = (cast: Item['cast']) => cast.author.displayName || cast.author.username || `fid:${cast.fid}`
+
+/** "<author> says Yes": which answer to the question the cast argues, as a chip in that side's colors. */
+const AuthorSide = ({ item }: { item: Item }) => {
+  const c = useColors()
+  const side = SIDE_PALETTES[item.authorStance]
+  const answer = item.authorStance === 'yes' ? 'Yes' : 'No'
+  return (
+    <View accessible accessibilityLabel={`${authorName(item.cast)} says ${answer}`}
+      style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+      <Text style={{ color: c.muted, fontSize: 14 }}>
+        <Text style={{ color: c.text, fontWeight: '600' }}>{authorName(item.cast)}</Text> says
+      </Text>
+      <View style={{
+        backgroundColor: side.bg, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 999,
+        paddingHorizontal: 10, paddingVertical: 2,
+      }}>
+        <Text style={{ color: side.text, fontSize: 13, fontWeight: '700' }}>{answer}</Text>
+      </View>
+    </View>
+  )
+}
+
 const DebateCard = ({ item }: { item: Item }) => {
   const c = useColors()
   return (
@@ -145,6 +168,7 @@ const DebateCard = ({ item }: { item: Item }) => {
           {laneLabel(item)}
         </Text>
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
+        <AuthorSide item={item} />
       </View>
       <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance)} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>
