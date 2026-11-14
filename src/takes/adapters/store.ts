@@ -99,6 +99,59 @@ export class TakesStore {
     return results.map(r => ({ hash: r.hash, fid: r.fid, ts: r.ts, lane: r.lane, claim: JSON.parse(r.claim) as Claim }))
   }
 
+  /* Merge: canonical markets */
+
+  /**
+   * Memberships are only meaningful under the rules that made them, and a market's canonical
+   * question depends on the order casts joined, so a MERGE_VERSION change rebuilds the whole
+   * merge rather than mixing versions.
+   */
+  async resetMergeIfStale(mergeVersion: string): Promise<boolean> {
+    const stale = await this.db.prepare('SELECT 1 FROM market_members WHERE merge_version != ?1 LIMIT 1').bind(mergeVersion).first()
+    if (!stale) return false
+    await this.db.batch([this.db.prepare('DELETE FROM market_members'), this.db.prepare('DELETE FROM markets')])
+    return true
+  }
+
+  /** Claims not yet placed in a market, oldest cast first, so the earliest question founds a market. */
+  async unmergedClaims(since: number, limit: number): Promise<OpinionRoot[]> {
+    const { results } = await this.db.prepare(
+      `SELECT c.hash, c.fid, c.ts, c.claim, c.lane FROM classifications c
+         LEFT JOIN market_members m ON m.cast_hash = c.hash
+        WHERE c.claim IS NOT NULL AND c.prompt_version = ?1 AND c.ts >= ?2 AND m.cast_hash IS NULL
+        ORDER BY c.ts ASC, c.hash ASC LIMIT ?3`,
+    ).bind(this.promptVersion, since, limit).all<{ hash: string; fid: number; ts: number; claim: string; lane: string }>()
+    return results.map(r => ({ hash: r.hash, fid: r.fid, ts: r.ts, lane: r.lane, claim: JSON.parse(r.claim) as Claim }))
+  }
+
+  /** Every market of one claim type, oldest first (planMatch breaks ties toward older). */
+  async marketsOfType(claimType: string): Promise<Array<{ id: string; question: string; embedding: ArrayBuffer | number[] }>> {
+    const { results } = await this.db.prepare(
+      'SELECT id, question, embedding FROM markets WHERE claim_type = ?1 ORDER BY created_ts ASC, id ASC',
+    ).bind(claimType).all<{ id: string; question: string; embedding: ArrayBuffer | number[] }>()
+    return results
+  }
+
+  async marketById(id: string): Promise<{ id: string; question: string } | null> {
+    return this.db.prepare('SELECT id, question FROM markets WHERE id = ?1').bind(id).first<{ id: string; question: string }>()
+  }
+
+  async putMarket(m: { id: string; question: string; claimType: string; embedding: ArrayBuffer; seedHash: string; createdTs: number }): Promise<void> {
+    await this.db.prepare(
+      'INSERT OR IGNORE INTO markets (id, question, claim_type, embedding, seed_hash, created_ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+    ).bind(m.id, m.question, m.claimType, m.embedding, m.seedHash, m.createdTs).run()
+  }
+
+  async putMember(m: {
+    castHash: string; marketId: string; mergeVersion: string; answer: 'yes' | 'no'; via: string
+    similarity: number | null; detail: unknown; now: number
+  }): Promise<void> {
+    await this.db.prepare(
+      `INSERT OR REPLACE INTO market_members (cast_hash, market_id, merge_version, answer, via, similarity, detail, ts)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+    ).bind(m.castHash, m.marketId, m.mergeVersion, m.answer, m.via, m.similarity, m.detail === undefined ? null : JSON.stringify(m.detail), m.now).run()
+  }
+
   /* Stage 2 */
 
   async stances(rootHashes: readonly string[]): Promise<Map<string, ReplyStance[]>> {

@@ -278,3 +278,38 @@ agreeable — a thread where three of fifteen replies engage with the question i
 normal and useful. A false stance puts someone in a market they never joined,
 and a false OPPOSING stance invents a disagreement that does not exist, which
 is worse.`
+
+// Client-only (no classifier counterpart yet): decides whether two YES/NO questions are one
+// market, and whether YES means the same thing in both. The test is the classifier's own
+// ("would the two questions attract the same people arguing the same thing?"), and the
+// examples are the cases its README recorded. Bump MERGE_VERSION in core/market.ts on change.
+export const MERGE_PROMPT = `You decide whether two YES/NO questions from an opinion-market app are the SAME market.
+
+Markets are settled by the crowd, so two questions are the same market when they would attract the same people arguing the same thing. People on one side of the first question should be on a definite side of the second.
+
+## Same market
+
+- Narrower or broader phrasing of one disagreement:
+  "Is the new press secretary competent?" / "Is the new press secretary performing well?"
+- The same claim in different words:
+  "Is the diesel deal strategically significant?" / "Is the fuel deal geopolitically significant?"
+  "Will Base attract the most builders?" / "Will Base earn the most builders?"
+
+## Different markets
+
+- The same subject judged along a different axis:
+  "Are the Coinbase layoffs bullish for $COIN?" (stock impact) / "Are the Coinbase layoffs a strategic mistake?" (strategy quality)
+- Different events or things, however similar the wording:
+  "Will Raikkonen win the championship?" / "Will Raikkonen win the Singapore Grand Prix?"
+- One question is the mechanism or implication of the other, not the same claim:
+  "Is contrarianism easier than people think?" / "Does a cognitive bias make contrarian views seem credible?"
+
+## Polarity
+
+Similar wording can hide opposite meanings. Decide separately whether a YES to the first question takes the same side as a YES to the second:
+
+- "Was the airdrop fair?" / "Was the airdrop unfair?": same market, YES does NOT mean the same.
+- "Should Farcaster drop the storage fee?" / "Should Farcaster keep the storage fee?": same market, YES does NOT mean the same.
+- "Is ketchup good on fries?" / "Is ketchup only for hot dogs?": same market, YES does NOT mean the same.
+
+When unsure whether two questions are one market, answer false: a missed merge leaves two small markets, but a wrong merge puts people in a market they never joined.`

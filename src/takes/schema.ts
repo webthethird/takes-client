@@ -122,3 +122,27 @@ export const StanceResult = z.object({
   confidence: z.number().min(0).max(1).describe("Confidence in the stance call."),
 });
 export type StanceResult = z.infer<typeof StanceResult>;
+
+// ── Merge: are two questions the same market? (client-only, no classifier counterpart) ──
+//
+// Field order is load-bearing, as in StanceResult: the comparison is written before either
+// verdict, so the model reasons before it commits.
+
+export const MarketVerdict = z.object({
+  reason: z
+    .string()
+    .describe(
+      "One or two sentences comparing what each question is really asking: the subject, what is being judged about it, and what a YES answer commits you to in each.",
+    ),
+  same_market: z
+    .boolean()
+    .describe(
+      "True if the two questions would attract the same people arguing the same thing. A narrower or broader phrasing of one disagreement is the same market; a different subject, or a different thing being judged about the same subject, is not.",
+    ),
+  yes_means_same: z
+    .boolean()
+    .describe(
+      "True if answering YES to the first question takes the same side as answering YES to the second. False when one is the negation or inverse of the other ('Was X fair?' vs 'Was X unfair?'). Only meaningful when same_market is true; set true otherwise.",
+    ),
+});
+export type MarketVerdict = z.infer<typeof MarketVerdict>;

@@ -10,8 +10,8 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
-import { CLASSIFY_PROMPT, STANCE_PROMPT } from '../prompts.ts'
-import { ClassifyResult, StanceResult } from '../schema.ts'
+import { CLASSIFY_PROMPT, MERGE_PROMPT, STANCE_PROMPT } from '../prompts.ts'
+import { ClassifyResult, MarketVerdict, StanceResult } from '../schema.ts'
 
 export const MODEL = 'claude-haiku-5-5'
 
@@ -22,6 +22,8 @@ export interface Classifier {
   classifyCast(i: CastInput): Promise<ClassifyResult | Declined>
   classifyStance(i: { question: string; rootText: string; parentText: string; replyText: string; sameAuthor: boolean }):
     Promise<StanceResult | Declined>
+  /** Merge: is `candidate` the same market as `existing`, and does YES mean the same in both? */
+  adjudicateMarket(i: { existing: string; candidate: string }): Promise<MarketVerdict | Declined>
 }
 
 /**
@@ -59,6 +61,10 @@ export class ClaudeClassifier implements Classifier {
     return r.parsed_output
   }
 
+  adjudicateMarket(i: { existing: string; candidate: string }): Promise<MarketVerdict | Declined> {
+    return adjudicateWith(this.client, i)
+  }
+
   async classifyStance(i: { question: string; rootText: string; parentText: string; replyText: string; sameAuthor: boolean }):
     Promise<StanceResult | Declined> {
     const r = await this.client.messages.parse({
@@ -76,6 +82,20 @@ export class ClaudeClassifier implements Classifier {
     if (!r.parsed_output) return { declined: true, reason: `no parsed output (stop_reason ${r.stop_reason})` }
     return r.parsed_output
   }
+}
+
+export const adjudicateWith = async (client: Anthropic, i: { existing: string; candidate: string }):
+  Promise<MarketVerdict | Declined> => {
+  const r = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 2048,
+    system: [{ type: 'text', text: MERGE_PROMPT, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: `<first>${i.existing}</first>\n\n<second>${i.candidate}</second>` }],
+    output_config: { effort: 'low', format: zodOutputFormat(MarketVerdict) },
+  })
+  if (r.stop_reason === 'refusal') return { declined: true, reason: `refused: ${r.stop_details?.category ?? 'unspecified'}` }
+  if (!r.parsed_output) return { declined: true, reason: `no parsed output (stop_reason ${r.stop_reason})` }
+  return r.parsed_output
 }
 
 /**

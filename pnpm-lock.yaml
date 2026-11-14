@@ -18,6 +18,9 @@ importers:
       '@expo/metro-runtime':
         specifier: 58.0.14
         version: 58.0.14(@expo/log-box@58.0.15)(expo@58.0.14)(react-dom@19.3.0(react@19.3.0))(react-native@0.88.0(@babel/core@7.29.13)(@react-native/metro-config@0.88.1(@babel/core@7.29.13))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+      '@noble/hashes':
+        specifier: 2.4.0
+        version: 2.4.0
       '@tanstack/react-query':
         specifier: 5.105.3
         version: 5.105.3(@types/react@19.3.0)(react@19.3.0)
@@ -7662,6 +7665,7 @@ time:
   '@anthropic-ai/sdk@1.6.0': '2026-11-05T19:05:25.552Z'
   '@cloudflare/workers-types@5.20261018.1': '2026-10-18T01:19:33.691Z'
   '@expo/metro-runtime@58.0.14': '2026-10-09T17:41:44.598Z'
+  '@noble/hashes@2.4.0': '2026-08-27T13:02:42.588Z'
   '@tanstack/react-query@5.105.3': '2026-11-02T20:39:13.878Z'
   '@types/react@19.3.0': '2026-09-09T18:08:49.750Z'
   '@warpstack/api@0.1.0': '2026-11-09T23:32:39.318Z'

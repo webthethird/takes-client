@@ -8,6 +8,7 @@
     "test": "vitest run",
     "classify": "node --env-file=.dev.vars scripts/classify.mts",
     "eval-stakes": "node --env-file=.dev.vars scripts/eval-stakes.mts",
+    "eval-merge": "node --env-file=.dev.vars scripts/eval-merge.mts",
     "start": "expo start",
     "web": "expo start --web",
     "ios": "warpstack-vault-build && expo run:ios --device",
@@ -20,6 +21,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
     "@expo/metro-runtime": "58.0.14",
+    "@noble/hashes": "2.4.0",
     "@tanstack/react-query": "5.105.3",
     "@warpstack/api": "0.1.0",
     "@warpstack/app-core": "0.1.0",

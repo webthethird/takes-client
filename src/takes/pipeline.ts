@@ -15,6 +15,7 @@ import { readFollows } from './adapters/node.ts'
 import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
+import { runMerge, type MergeReport } from './merge.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
   PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, STANCE_VERSION, anchorToRoot, chooseClaim, gatedChallenge,
@@ -42,6 +43,7 @@ export type PassReport = {
   scored: number
   dropped: number
   stoppedEarly?: string
+  merge?: MergeReport
 }
 
 const bandOf = (claim: OpinionRoot['claim']) => Math.floor(gatedChallenge(claim) / CHALLENGE_BAND + 1e-9)
@@ -143,6 +145,9 @@ export const runScoringPass = async (
         return 'ok'
       }
     }), CONCURRENCY)
+
+    /* 2b. Merge: place new claims in canonical markets (shares the Claude budget). */
+    if (!stop) report.merge = await runMerge({ store, classifier, openaiKey: cfg.openaiKey, since: oldSince, now, spend, fail })
 
     /* 3. Stage 2: fresh roots, and older ones good enough to resurface. Best band first. */
     const roots = (await store.opinionRoots(oldSince))
