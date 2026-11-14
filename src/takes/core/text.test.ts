@@ -38,3 +38,22 @@ describe('parsing index columns', () => {
     expect(parseMentions('[{"fid":1},{"fid":2,"position":3}]')).toEqual([{ fid: 2, position: 3 }])
   })
 })
+
+import { isLowercaseStyle, matchCasing } from './text.ts'
+
+describe('matchCasing', () => {
+  const taxes = 'okay comparing taxes with splitting the bill between salad and lobster makes no fucking sense\n\neveryone gets the same quality of services and those who have more must pay more'
+  it('lowercases replies to a lowercase cast (the live miss), keeping acronyms, names and tokens', () => {
+    expect(matchCasing(taxes, 'Progressive rates hit a Nurse harder than DeFi whales or the IRS thinks, says @dwr about $DEGEN.'))
+      .toBe('progressive rates hit a nurse harder than DeFi whales or the IRS thinks, says @dwr about $DEGEN.')
+    expect(matchCasing(taxes, 'I think so')).toBe('i think so')
+  })
+  it('treats ALL-CAPS emphasis as neither style, and judges by sentence starts', () => {
+    expect(isLowercaseStyle('even the people working on AI dont understand it, but lawmakers are supposed to REGULATE it? (and on what grounds?)')).toBe(true)
+    expect(isLowercaseStyle('Lol network school turning into slop')).toBe(false)
+    expect(isLowercaseStyle('Valuing a startup on cash flows is a category error. A startup has no cash flows.')).toBe(false)
+  })
+  it('leaves replies to sentence-cased casts untouched', () => {
+    expect(matchCasing('Remote work made me productive. I am never going back.', 'No commute is two extra hours.')).toBe('No commute is two extra hours.')
+  })
+})

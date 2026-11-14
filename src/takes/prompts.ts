@@ -334,10 +334,10 @@ You are given the CAST, the yes/no QUESTION it argues, and the caster's ANSWER t
 
 Write both replies in the cast's register, so the debate feels native to the thread:
 - The same language. A Dutch cast gets Dutch replies.
-- The same casing, exactly. An all-lowercase cast gets all-lowercase replies; a cast written in normal sentence case gets normal sentence case. Never lowercase a capitalized cast.
+- The same casing, exactly, whatever the cast's length or topic. A cast that starts in lowercase gets replies that start and stay in lowercase, even if it is long or serious; ALL-CAPS words used for emphasis ("REGULATE") do not make it a capitalized cast. A cast written in normal sentence case gets normal sentence case. Never lowercase a capitalized cast, never capitalize a lowercase one.
 - The same level of formality and care. Crypto slang gets crypto slang; a casual cast with dropped apostrophes ("hes", "dont") gets an equally casual reply, not a polished paragraph; a measured, carefully written cast gets measured sentences. Do not add typos.
 - Emoji only if the cast uses them, and about as many.
-- About the cast's length, counted in words. A short cast (one line, a dozen words) gets one short sentence of at most about 20 words: make one point, not two. A long cast still gets at most two sentences.
+- About the cast's length, counted in words. A short cast (one line, a dozen words) gets one short sentence of at most about 20 words: make one point, not two. A long cast still gets at most two sentences and about 35 words: a reply, not an essay.
 
 ## Start with the point
 

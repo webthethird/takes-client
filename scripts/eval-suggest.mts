@@ -8,6 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import { ClaudeClassifier } from '../src/takes/adapters/claude.ts'
+import { matchCasing } from '../src/takes/core/text.ts'
 
 type Case = { text: string; question: string; answer: 'yes' | 'no' }
 const BUILT_IN: Case[] = [
@@ -27,6 +28,7 @@ const DUTCH = /\b(de|het|een|en|niet|van|wat|dat|maar|ook)\b/i
 const INSULTS = /\b(idiot|stupid|moron|clown|loser|dumb|retard|shill)\b/i
 const lower = (s: string) => s === s.toLowerCase()
 const startsUpper = (s: string) => /^\p{Lu}/u.test(s.trim())
+const startsLower = (s: string) => /^\p{Ll}/u.test(s.trim())
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
 /** Consistently sentence-cased: at least two sentence or line starts, all capitalized. "Lol network school ..." is not. */
 const sentenceCased = (s: string) => {
@@ -42,12 +44,14 @@ for (const { k, r } of rows) {
   console.log(`\nCAST  ${k.text.replace(/\n+/g, ' / ').slice(0, 160)}`)
   if ('declined' in r) { console.log(`  DECLINED: ${r.reason}`); flags++; continue }
   console.log(`  register:  ${r.register}`)
-  for (const [side, s] of [['back', r.back], ['challenge', r.challenge]] as const) {
+  // As production stores them: casing enforced after generation.
+  for (const [side, s] of [['back', matchCasing(k.text, r.back)], ['challenge', matchCasing(k.text, r.challenge)]] as const) {
     const issues: string[] = []
     if (DUTCH.test(k.text) && DUTCH.test(k.text.split(' ').slice(0, 8).join(' ')) && !DUTCH.test(s)) issues.push('not Dutch')
     if (lower(k.text) && !lower(s)) issues.push('not lowercase')
+    else if (startsLower(k.text) && !startsLower(s) && !/^[$@#\d]/.test(s)) issues.push('capitalized a lowercase cast')
     if (!EMOJI.test(k.text) && EMOJI.test(s)) issues.push('added emoji')
-    if (words(s) > Math.max(1.5 * words(k.text), 22) || sentences(s) > 2) issues.push(`long (${words(s)} vs ${words(k.text)} words, ${sentences(s)} sentences)`)
+    if (words(s) > Math.min(Math.max(1.5 * words(k.text), 22), 40) || sentences(s) > 2) issues.push(`long (${words(s)} vs ${words(k.text)} words, ${sentences(s)} sentences)`)
     if (sentenceCased(k.text) && !startsUpper(s) && !/^[$@#\d]/.test(s)) issues.push('lowercased a sentence-cased cast')
     if (OPENER.test(s)) issues.push('template opener')
     if (INSULTS.test(s)) issues.push('insult word')

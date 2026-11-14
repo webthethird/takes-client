@@ -18,7 +18,7 @@ import type { Claim, StanceResult } from '../schema.ts'
  */
 export const PROMPT_VERSION = 'client-4:haiku-5-5' // 3: taste claims arguable (classifier 54e4220); 4: broadest question the caster argues
 /** The suggest stage's version: bump when its prompt or schema changes; suggestions are redone. */
-export const SUGGEST_VERSION = 'suggest-1:haiku-5-5'
+export const SUGGEST_VERSION = 'suggest-2:haiku-5-5' // 2: casing from the cast's start, enforced in code; 35-word cap
 /** Stage 2's version: bump when the stance prompt, schema or reconciliation changes. */
 export const STANCE_VERSION = 'stance-2:haiku-5-5' // 2: direct replies anchored to stage 1's answer
 

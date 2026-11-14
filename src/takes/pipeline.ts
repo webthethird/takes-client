@@ -15,6 +15,7 @@ import { readFollows } from './adapters/node.ts'
 import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
+import { matchCasing } from './core/text.ts'
 import { runMerge, type MergeReport } from './merge.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
@@ -166,14 +167,19 @@ export const runScoringPass = async (
       await pool(need.map(root => async () => {
         if (!spend()) return 'stop'
         try {
-          const r = await classifier.suggest({ text: names.render(rootCasts.get(root.hash)!), question: root.claim.question, answer: root.claim.answer })
+          const text = names.render(rootCasts.get(root.hash)!)
+          const r = await classifier.suggest({ text, question: root.claim.question, answer: root.claim.answer })
           if (isDeclined(r)) {
             // Recorded empty, or it would be retried every minute; the boxes fall back to static copy.
             report.declined++
             await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: '', challenge: '', register: r.reason, now })
             return 'ok'
           }
-          await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: r.back, challenge: r.challenge, register: r.register, now })
+          // Casing is enforced, not requested: the prompt alone missed long lowercase casts.
+          await store.putSuggestion({
+            hash: root.hash, version: SUGGEST_VERSION, back: matchCasing(text, r.back), challenge: matchCasing(text, r.challenge),
+            register: r.register, now,
+          })
           report.suggested++
           return 'ok'
         } catch (e) {
