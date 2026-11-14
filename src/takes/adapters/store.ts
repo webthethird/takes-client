@@ -14,7 +14,16 @@ export type ScoreRow = {
 }
 
 export class TakesStore {
-  constructor(private readonly db: D1Database, private readonly promptVersion: string, private readonly stanceVersion: string) {}
+  /**
+   * A stance is where a reply lands on ONE question, so it is only valid for the stage-1 prompt
+   * that produced that question as well as the stance prompt: a stage-1 change rewrites the
+   * questions and must invalidate stances too. Rows are keyed by both versions.
+   */
+  private readonly stanceVersion: string
+
+  constructor(private readonly db: D1Database, private readonly promptVersion: string, stanceVersion: string) {
+    this.stanceVersion = `${stanceVersion}|${promptVersion}`
+  }
 
   /* Lease: one scoring pass at a time. */
 

@@ -9,6 +9,7 @@
     "classify": "node --env-file=.dev.vars scripts/classify.mts",
     "eval-stakes": "node --env-file=.dev.vars scripts/eval-stakes.mts",
     "eval-merge": "node --env-file=.dev.vars scripts/eval-merge.mts",
+    "eval-breadth": "node --env-file=.dev.vars scripts/eval-breadth.mts",
     "start": "expo start",
     "web": "expo start --web",
     "ios": "warpstack-vault-build && expo run:ios --device",

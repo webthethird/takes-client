@@ -18,9 +18,18 @@
 import { isDeclined, isTransient, type Classifier } from './adapters/claude.ts'
 import { embedMany } from './adapters/openai.ts'
 import type { TakesStore } from './adapters/store.ts'
+import { PROMPT_VERSION } from './core/score.ts'
 import {
   MERGE_VERSION, canonicalAnswer, decodeEmbedding, encodeEmbedding, planMatch, questionHash, type MarketRef,
 } from './core/market.ts'
+
+/**
+ * Memberships are valid for one set of merge rules AND one stage-1 prompt: a membership says
+ * which market a cast's QUESTION belongs to, and a stage-1 change rewrites the questions.
+ * Without the second half, a re-classified cast keeps its old row, looks already placed, and
+ * is never merged under its new question.
+ */
+const MERGE_KEY = `${MERGE_VERSION}|${PROMPT_VERSION}`
 
 /** Claims placed per pass. The embedding call is one request; adjudications share the Claude budget. */
 const PER_PASS = 200
@@ -34,7 +43,7 @@ export const runMerge = async (opts: {
   const { store, classifier, now } = opts
   const report: MergeReport = { merged: 0, founded: 0, adjudicated: 0, absorbed: 0 }
   if (!opts.openaiKey) return { ...report, skipped: 'OPENAI_API_KEY is not set; merging is off' }
-  if (await store.resetMergeIfStale(MERGE_VERSION)) console.log(`takes: merge rules changed; rebuilding markets under ${MERGE_VERSION}`)
+  if (await store.resetMergeIfStale(MERGE_KEY)) console.log(`takes: merge rules or questions changed; rebuilding markets under ${MERGE_KEY}`)
 
   const claims = await store.unmergedClaims(opts.since, PER_PASS)
   if (claims.length === 0) return report
@@ -93,7 +102,7 @@ export const runMerge = async (opts: {
     const embedding = embedded.vectors[i]!
     const markets = await marketsFor(type)
     const plan = planMatch(question, embedding, markets)
-    const member = { castHash: root.hash, mergeVersion: MERGE_VERSION, now, embedding: encodeEmbedding(embedding) }
+    const member = { castHash: root.hash, mergeVersion: MERGE_KEY, now, embedding: encodeEmbedding(embedding) }
 
     const found = async () => {
       const id = questionHash(question)

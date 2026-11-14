@@ -16,7 +16,7 @@ import type { Claim, StanceResult } from '../schema.ts'
  * classifications count as unclassified. Stage 2 has its own, so a stance-only change
  * re-runs only stances (the classifier keeps the same split: CLASSIFY_ / STANCE_VERSION).
  */
-export const PROMPT_VERSION = 'client-3:haiku-5-5' // 3: taste claims people split on score as arguable (classifier 54e4220)
+export const PROMPT_VERSION = 'client-4:haiku-5-5' // 3: taste claims arguable (classifier 54e4220); 4: broadest question the caster argues
 /** Stage 2's version: bump when the stance prompt, schema or reconciliation changes. */
 export const STANCE_VERSION = 'stance-2:haiku-5-5' // 2: direct replies anchored to stage 1's answer
 
