@@ -30,6 +30,16 @@ const CASES: Case[] = [
   { a: "Is the Fed's rate cut good for crypto?", b: "Is the Fed's rate cut good for stocks?", same: false, why: 'held-out: different object' },
   { a: 'Is Bessent sincerely trying to make the Treasury succeed?', b: 'Is Bessent a competent Treasury Secretary?', same: false, why: 'held-out: sincerity vs competence' },
   { a: 'Is Network School good for founders?', b: 'Is Network School good for Farcaster?', same: false, why: 'held-out: different beneficiary' },
+  // Live near-misses the user judged to be one market (merge-1 kept them apart). Held out: the
+  // prompt's examples are analogous ($DEGEN, the trending tab), never these questions.
+  { a: 'Is $BASED a good daily app to stake in?', b: 'Is the $BASED project good?', same: true, yesSame: true, why: 'live: $BASED facets (user: one market)' },
+  { a: 'Is $BASED one of the best projects on Farcaster?', b: 'Is the $BASED project good?', same: true, yesSame: true, why: 'live: $BASED facets (user: one market)' },
+  { a: 'Is $BASED a good daily app to stake in?', b: 'Is $BASED one of the best projects on Farcaster?', same: true, yesSame: true, why: 'live: $BASED facets (user: one market)' },
+  { a: 'Is disabling reply bumping in the following feed a good change?', b: 'Is reply bumping a good feature?', same: true, yesSame: false, why: 'live: reply bumping, inverted (user: one market)' },
+  // Live near-misses that should stay apart under the looser rule.
+  { a: 'Is avoiding Google and Apple products worthwhile?', b: 'Is avoiding Microsoft products a good choice?', same: false, why: 'live: different objects' },
+  { a: 'Is Jensen Huang behaving admirably in his personal life?', b: 'Is the Jensen Huang controversy legitimate?', same: false, why: 'live: conduct vs the story' },
+  { a: 'Is the FAA nationwide ground stop a historically significant event?', b: "Was the FAA's nationwide flight grounding a good decision?", same: false, why: 'live: significance vs wisdom' },
 ]
 
 const key = process.env.ANTHROPIC_API_KEY

@@ -289,16 +289,24 @@ Markets are settled by the crowd, so two questions are the same market when they
 
 ## Same market
 
+Merge generously when a reader would see one argument. This app clusters casts that are roughly about the same thing into one market, and a feed of near-duplicate markets is worse than one market with more people in it.
+
 - Narrower or broader phrasing of one disagreement:
   "Is the new press secretary competent?" / "Is the new press secretary performing well?"
 - The same claim in different words:
   "Is the diesel deal strategically significant?" / "Is the fuel deal geopolitically significant?"
   "Will Base attract the most builders?" / "Will Base earn the most builders?"
+- The same subject given the same overall verdict (good or bad, worth it or not), even through different facets of it. Someone who thinks the thing is good answers both the same way:
+  "Is $DEGEN a good token to hold?" / "Is $DEGEN one of the best projects on Base?" / "Is the Degen project good?"
+- A change and the thing it changes (check polarity below):
+  "Is removing the trending tab a good change?" / "Is the trending tab a good feature?"
 
 ## Different markets
 
-- The same subject judged along a different axis:
-  "Are the Coinbase layoffs bullish for $COIN?" (stock impact) / "Are the Coinbase layoffs a strategic mistake?" (strategy quality)
+- The same subject, but a different KIND of question, where people could answer the two differently without contradicting themselves:
+  "Are the Coinbase layoffs bullish for $COIN?" (effect on the stock price) / "Are the Coinbase layoffs a strategic mistake?" (wisdom of the decision)
+  "Is Vitalik honest?" (character) / "Is Vitalik an effective leader?" (ability)
+  "Did the senator behave badly?" (their conduct) / "Is the coverage of the senator fair?" (the coverage)
 - Different events or things, however similar the wording:
   "Will Raikkonen win the championship?" / "Will Raikkonen win the Singapore Grand Prix?"
 - One question is the mechanism or implication of the other, not the same claim:
@@ -312,4 +320,4 @@ Similar wording can hide opposite meanings. Decide separately whether a YES to t
 - "Should Farcaster drop the storage fee?" / "Should Farcaster keep the storage fee?": same market, YES does NOT mean the same.
 - "Is ketchup good on fries?" / "Is ketchup only for hot dogs?": same market, YES does NOT mean the same.
 
-When unsure whether two questions are one market, answer false: a missed merge leaves two small markets, but a wrong merge puts people in a market they never joined.`
+When two questions share a subject and an overall verdict, merge them. Answer false only when someone could reasonably answer them differently without contradicting themselves: that is a different market, and a wrong merge puts people in a market they never joined.`

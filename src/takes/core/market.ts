@@ -13,7 +13,7 @@ import { keccak_256 } from '@noble/hashes/sha3.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
 
 /** Bump when matching rules or the adjudication prompt change: memberships are redone. */
-export const MERGE_VERSION = 'merge-1'
+export const MERGE_VERSION = 'merge-2' // 2: merge the same subject + same overall verdict ("roughly the same")
 
 /**
  * At or above: the same market, as far as similarity goes. 0.82, the classifier's measured
