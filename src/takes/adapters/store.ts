@@ -132,6 +132,34 @@ export class TakesStore {
     return results
   }
 
+  /** Members' own question embeddings, for every market of one claim type. */
+  async memberEmbeddingsOfType(claimType: string): Promise<Array<{ market_id: string; embedding: ArrayBuffer | number[] }>> {
+    const { results } = await this.db.prepare(
+      `SELECT mm.market_id, mm.embedding FROM market_members mm JOIN markets m ON m.id = mm.market_id
+        WHERE m.claim_type = ?1 AND mm.embedding IS NOT NULL AND mm.via != 'seed'`,
+    ).bind(claimType).all<{ market_id: string; embedding: ArrayBuffer | number[] }>()
+    return results
+  }
+
+  /**
+   * Consolidates market `from` into `into`: its members move over, their answers flipped when
+   * YES means the opposite in the two canonical questions, and `from` is deleted. One batch, so
+   * no reader sees a member pointing at a deleted market.
+   */
+  async absorbMarket(from: string, into: string, flip: boolean, detail: unknown): Promise<number> {
+    const moved = await this.db.prepare('SELECT count(*) AS n FROM market_members WHERE market_id = ?1').bind(from).first<{ n: number }>()
+    await this.db.batch([
+      this.db.prepare(
+        `UPDATE market_members SET market_id = ?2,
+           answer = CASE WHEN ?3 = 1 THEN (CASE answer WHEN 'yes' THEN 'no' ELSE 'yes' END) ELSE answer END,
+           detail = json_set(coalesce(detail, '{}'), '$.absorbed', json(?4))
+         WHERE market_id = ?1`,
+      ).bind(from, into, flip ? 1 : 0, JSON.stringify(detail)),
+      this.db.prepare('DELETE FROM markets WHERE id = ?1').bind(from),
+    ])
+    return moved?.n ?? 0
+  }
+
   async marketById(id: string): Promise<{ id: string; question: string } | null> {
     return this.db.prepare('SELECT id, question FROM markets WHERE id = ?1').bind(id).first<{ id: string; question: string }>()
   }
@@ -144,12 +172,12 @@ export class TakesStore {
 
   async putMember(m: {
     castHash: string; marketId: string; mergeVersion: string; answer: 'yes' | 'no'; via: string
-    similarity: number | null; detail: unknown; now: number
+    similarity: number | null; detail: unknown; embedding: ArrayBuffer; now: number
   }): Promise<void> {
     await this.db.prepare(
-      `INSERT OR REPLACE INTO market_members (cast_hash, market_id, merge_version, answer, via, similarity, detail, ts)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-    ).bind(m.castHash, m.marketId, m.mergeVersion, m.answer, m.via, m.similarity, m.detail === undefined ? null : JSON.stringify(m.detail), m.now).run()
+      `INSERT OR REPLACE INTO market_members (cast_hash, market_id, merge_version, answer, via, similarity, detail, ts, embedding)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    ).bind(m.castHash, m.marketId, m.mergeVersion, m.answer, m.via, m.similarity, m.detail === undefined ? null : JSON.stringify(m.detail), m.now, m.embedding).run()
   }
 
   /* Stage 2 */

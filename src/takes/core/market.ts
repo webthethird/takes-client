@@ -13,7 +13,7 @@ import { keccak_256 } from '@noble/hashes/sha3.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
 
 /** Bump when matching rules or the adjudication prompt change: memberships are redone. */
-export const MERGE_VERSION = 'merge-2' // 2: merge the same subject + same overall verdict ("roughly the same")
+export const MERGE_VERSION = 'merge-4' // 2: same subject + same overall verdict; 3: match every member; 4: consolidate bridged markets
 
 /**
  * At or above: the same market, as far as similarity goes. 0.82, the classifier's measured
@@ -39,12 +39,25 @@ export const cosine = (a: Float32Array, b: Float32Array): number => {
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb)
 }
 
-export type MarketRef = { id: string; question: string; embedding: Float32Array }
+/**
+ * A market as matching sees it: its canonical question, and the embeddings of that question
+ * and of every member's own question. A new question is compared with all of them, so the
+ * market is found through whichever cast is closest; but Claude always judges it against the
+ * canonical question, so membership can't drift along a chain of near neighbours.
+ */
+export type MarketRef = { id: string; question: string; embeddings: Float32Array[] }
 
+/**
+ * `bridges`: other markets this question is also close to (at or above AMBIGUOUS_THRESHOLD).
+ * Claims are placed one at a time, so a question can arrive that belongs with two markets
+ * founded separately before it existed (live: three $BASED questions, the middle one founded
+ * a market at 0.652 from the first, before the third arrived at 0.763 / 0.762 from both).
+ * Once it joins one, the others are candidates to consolidate into one market.
+ */
 export type MatchPlan =
-  | { kind: 'identical'; market: MarketRef }
-  | { kind: 'join'; market: MarketRef; similarity: number } // join; Claude checks polarity only
-  | { kind: 'ambiguous'; market: MarketRef; similarity: number } // Claude decides both
+  | { kind: 'identical'; market: MarketRef; bridges: MarketRef[] }
+  | { kind: 'join'; market: MarketRef; similarity: number; bridges: MarketRef[] } // join; Claude checks polarity only
+  | { kind: 'ambiguous'; market: MarketRef; similarity: number; bridges: MarketRef[] } // Claude decides both
   | { kind: 'new'; best: number }
 
 /**
@@ -54,16 +67,21 @@ export type MatchPlan =
  * choice is stable.
  */
 export const planMatch = (question: string, embedding: Float32Array, markets: readonly MarketRef[]): MatchPlan => {
+  const scored = markets.map(m => {
+    let s = -1
+    for (const e of m.embeddings) s = Math.max(s, cosine(embedding, e))
+    return { m, s }
+  })
+  const near = (except: MarketRef) => scored.filter(x => x.m !== except && x.s >= AMBIGUOUS_THRESHOLD).map(x => x.m)
   const exact = markets.find(m => m.question === question)
-  if (exact) return { kind: 'identical', market: exact }
-  let best: MarketRef | null = null
-  let bestSim = -1
-  for (const m of markets) {
-    const s = cosine(embedding, m.embedding)
-    if (s > bestSim + 1e-12) { best = m; bestSim = s }
-  }
-  if (!best || bestSim < AMBIGUOUS_THRESHOLD) return { kind: 'new', best: Math.max(bestSim, 0) }
-  return bestSim >= MATCH_THRESHOLD ? { kind: 'join', market: best, similarity: bestSim } : { kind: 'ambiguous', market: best, similarity: bestSim }
+  if (exact) return { kind: 'identical', market: exact, bridges: near(exact) }
+  let best: { m: MarketRef; s: number } | null = null
+  for (const x of scored) if (!best || x.s > best.s + 1e-12) best = x
+  if (!best || best.s < AMBIGUOUS_THRESHOLD) return { kind: 'new', best: Math.max(best?.s ?? 0, 0) }
+  const bridges = near(best.m)
+  return best.s >= MATCH_THRESHOLD
+    ? { kind: 'join', market: best.m, similarity: best.s, bridges }
+    : { kind: 'ambiguous', market: best.m, similarity: best.s, bridges }
 }
 
 /**

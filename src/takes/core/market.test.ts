@@ -18,13 +18,13 @@ describe('questionHash matches Solidity keccak256(bytes(question))', () => {
 /** Unit vectors in 2D at an angle: cosine(a, b) is exactly cos(angle). */
 const at = (deg: number) => new Float32Array([Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)])
 const angleFor = (sim: number) => (Math.acos(sim) * 180) / Math.PI
-const market = (id: string, question: string, deg: number): MarketRef => ({ id, question, embedding: at(deg) })
+const market = (id: string, question: string, ...degs: number[]): MarketRef => ({ id, question, embeddings: degs.map(at) })
 
 describe('planMatch', () => {
   const markets = [market('m1', 'Was the $SNAP airdrop fair?', 0), market('m2', 'Is Base the best L2?', 90)]
 
   it('identical text joins outright, whatever the embedding says', () => {
-    expect(planMatch('Is Base the best L2?', at(0), markets)).toEqual({ kind: 'identical', market: markets[1] })
+    expect(planMatch('Is Base the best L2?', at(0), markets)).toEqual({ kind: 'identical', market: markets[1], bridges: [markets[0]] })
   })
   it('at or above the match threshold: join (Claude checks polarity only)', () => {
     const p = planMatch('Was the SNAP airdrop fair to users?', at(angleFor(MATCH_THRESHOLD) - 0.5), markets)
@@ -44,6 +44,35 @@ describe('planMatch', () => {
     expect(p.kind !== 'new' && p.market.id).toBe('old')
   })
   it('no markets yet: new', () => expect(planMatch('Q?', at(0), [])).toEqual({ kind: 'new', best: 0 }))
+  it('a market is found through its closest member, not only its founding question', () => {
+    // The live $BASED case: 0.652 from the founding question, 0.762 from a member.
+    // Query at 0.652 from the seed (at 0 degrees); the member sits 0.762 from the query.
+    const q = angleFor(0.652)
+    const based = market('based', 'Is $BASED a good daily app to stake in?', 0, q + angleFor(0.762))
+    expect(cosine(at(q), based.embeddings[0]!)).toBeCloseTo(0.652, 3)
+    expect(cosine(at(q), based.embeddings[1]!)).toBeCloseTo(0.762, 3)
+    const p = planMatch('Is $BASED one of the best projects on Farcaster?', at(q), [based])
+    expect(p.kind).toBe('ambiguous')
+    expect(p.kind !== 'new' && p.market.id).toBe('based')
+  })
+})
+
+describe('planMatch bridges: one question close to two markets', () => {
+  it('reports the other near markets, so they can be consolidated (the live $BASED order)', () => {
+    // Founded in this order: "good daily app" at 0, then "best projects" 0.652 away (its own
+    // market). The third question is 0.763 from the first and 0.762 from the second.
+    const a = angleFor(0.763)
+    const first = market('first', 'Is $BASED a good daily app to stake in?', 0)
+    const second = market('second', 'Is $BASED one of the best projects on Farcaster?', a + angleFor(0.762))
+    const p = planMatch('Is the $BASED project good?', at(a), [first, second])
+    expect(p.kind).toBe('ambiguous')
+    expect(p.kind !== 'new' && p.market.id).toBe('first')
+    expect(p.kind !== 'new' && p.bridges.map(m => m.id)).toEqual(['second'])
+  })
+  it('a market below the ambiguous threshold is not a bridge', () => {
+    const p = planMatch('Q?', at(0), [market('near', 'A?', 10), market('far', 'B?', 80)])
+    expect(p.kind !== 'new' && p.bridges).toEqual([])
+  })
 })
 
 describe('canonicalAnswer', () => {
