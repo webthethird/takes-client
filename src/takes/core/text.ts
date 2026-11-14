@@ -50,27 +50,38 @@ export const parseMentions = (json: string): Mention[] => {
 }
 
 /**
- * Whether a cast is written in lowercase style: most of its sentence and line starts are
- * lowercase. ALL-CAPS emphasis ("REGULATE") doesn't count either way; "Lol network school ..."
- * (one start, capitalized) is not lowercase style.
+ * How a cast cases the start of its sentences and lines: 'lower' when most starts are
+ * lowercase, 'sentence' when most are capitalized, null when it has no letters to judge by.
+ * Only the first letter of each start counts, so ALL-CAPS emphasis ("REGULATE") in the middle
+ * of a lowercase cast doesn't change its style.
  */
-export const isLowercaseStyle = (cast: string): boolean => {
+export const castCasing = (cast: string): 'lower' | 'sentence' | null => {
   const starts = cast.split(/(?:[.!?]+\s+|\n+)/).map(s => s.trim().match(/\p{L}/u)?.[0]).filter((c): c is string => c !== undefined)
-  if (starts.length === 0) return false
+  if (starts.length === 0) return null
   const lowerStarts = starts.filter(c => c === c.toLowerCase() && c !== c.toUpperCase()).length
-  return lowerStarts * 2 > starts.length
+  return lowerStarts * 2 > starts.length ? 'lower' : 'sentence'
 }
 
+export const isLowercaseStyle = (cast: string): boolean => castCasing(cast) === 'lower'
+
 /**
- * Brings a generated reply into a lowercase-style cast's casing. The suggest prompt asks for
- * this, but measured on live casts it was ignored for long, serious lowercase casts (a 57-word
- * all-lowercase tax rant got sentence-case replies), so casing is enforced here instead.
- * Kept as written: all-caps tokens of 2+ letters (AI, VVD), mixed case inside a word (DeFi,
- * McMahon, iPhone), and $tickers, @mentions, #tags and URLs. Everything else is lowercased,
- * "I" included, as people writing in lowercase do.
+ * Brings a generated reply into the cast's casing. The suggest prompt asks for this, but on
+ * live casts it was ignored in both directions: long lowercase casts got sentence-case replies
+ * (a 57-word lowercase tax rant), and sentence-case casts got lowercase ones (a Navarro cast).
+ * So casing is enforced here.
+ *
+ * 'lower': everything lowercased, "I" included, as people writing in lowercase do. Kept as
+ * written: all-caps tokens of 2+ letters (AI, VVD), inner capitals (DeFi, McMahon, iPhone), and
+ * $tickers, @mentions, #tags and URLs.
+ * 'sentence': each sentence's first letter capitalized; nothing else is touched (a proper
+ * noun the model lowercased mid-sentence stays as it is).
  */
 export const matchCasing = (cast: string, reply: string): string => {
-  if (!isLowercaseStyle(cast)) return reply
+  const style = castCasing(cast)
+  if (style === 'sentence') {
+    return reply.replace(/(^|[.!?]\s+)(\p{Ll})/gu, (_, pre: string, c: string) => pre + c.toUpperCase())
+  }
+  if (style !== 'lower') return reply
   return reply.replace(/\S+/g, tok => {
     if (/^[$@#]|^https?:\/\//i.test(tok)) return tok
     const letters = tok.replace(/[^\p{L}]/gu, '')

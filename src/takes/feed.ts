@@ -10,6 +10,7 @@
 // presenter of our own to keep in step with Warpstack's.
 
 import { TakesStore } from './adapters/store.ts'
+import { matchCasing } from './core/text.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
   FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
@@ -94,6 +95,11 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const exhausted = next.f >= freshRanked.length && next.o >= oldRanked.length
 
   // An empty suggestion was declined: sent as null so the boxes fall back to static copy.
+  const cased = (cast: unknown, s: string | undefined): string | null => {
+    if (!s) return null
+    const text = (cast as { text?: unknown }).text
+    return typeof text === 'string' ? matchCasing(text, s) : s
+  }
   const suggestions = await store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION)
   const items = kept
     .map(({ row, resurfaced, cast, rebuttal }) => ({
@@ -101,8 +107,9 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       rebuttal: rebuttal === 'unauthorized' ? null : rebuttal,
       question: row.question,
       challengeReason: row.challenge_reason,
-      backSuggestion: suggestions.get(row.hash)?.back || null,
-      challengeSuggestion: suggestions.get(row.hash)?.challenge || null,
+      // Casing is matched here, at read time, so a casing-rule change needs no regeneration.
+      backSuggestion: cased(cast, suggestions.get(row.hash)?.back),
+      challengeSuggestion: cased(cast, suggestions.get(row.hash)?.challenge),
       authorStance: row.author_stance,
       bothSides: row.both_sides === 1,
       yesAuthors: row.yes_authors,

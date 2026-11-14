@@ -53,7 +53,13 @@ describe('matchCasing', () => {
     expect(isLowercaseStyle('Lol network school turning into slop')).toBe(false)
     expect(isLowercaseStyle('Valuing a startup on cash flows is a category error. A startup has no cash flows.')).toBe(false)
   })
-  it('leaves replies to sentence-cased casts untouched', () => {
+  it('capitalizes sentence starts in replies to a sentence-cased cast (the live Navarro miss)', () => {
+    const navarro = 'Its all fun and games till Trump rams Navarro through before new senate seats.\n\nAs bad as Lutnick is, Navarro is hilariously exponential'
+    expect(matchCasing(navarro, "lutnick's cantor history is a real problem. navarro is just loud"))
+      .toBe("Lutnick's cantor history is a real problem. Navarro is just loud")
     expect(matchCasing('Remote work made me productive. I am never going back.', 'No commute is two extra hours.')).toBe('No commute is two extra hours.')
+  })
+  it('leaves a reply alone when the cast has no letters to judge by', () => {
+    expect(matchCasing('🤯🤯', 'wild')).toBe('wild')
   })
 })
