@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { SIDE_PALETTES } from './side-palette.ts'
+import { SEE_MORE_COLOR } from './collapse.ts'
+import { schemeOf, SIDE_BORDER, SIDE_PALETTES } from './side-palette.ts'
 
 // WCAG 2 relative luminance and contrast ratio.
 const luminance = (hex: string) => {
@@ -13,22 +14,31 @@ const contrast = (a: string, b: string) => {
 }
 
 describe('side palettes meet the contrast bar', () => {
-  for (const [side, p] of Object.entries(SIDE_PALETTES)) {
-    it(`${side}: text 4.5:1, icons 3:1`, () => {
-      for (const k of ['text', 'muted', 'accent', 'danger'] as const) expect(contrast(p[k], p.bg), k).toBeGreaterThanOrEqual(4.5)
-      for (const k of ['text', 'muted'] as const) expect(contrast(p[k], p.pressed), `${k} pressed`).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(p.accentText, p.accentFill), 'button').toBeGreaterThanOrEqual(4.5)
-      for (const k of ['faint', 'liked'] as const) expect(contrast(p[k], p.bg), k).toBeGreaterThanOrEqual(3)
+  for (const scheme of ['light', 'dark'] as const) {
+    for (const [side, p] of Object.entries(SIDE_PALETTES[scheme])) {
+      it(`${scheme} ${side}: text 4.5:1, icons and border 3:1`, () => {
+        for (const k of ['text', 'muted', 'accent', 'danger'] as const) expect(contrast(p[k], p.bg), k).toBeGreaterThanOrEqual(4.5)
+        for (const k of ['text', 'muted'] as const) expect(contrast(p[k], p.pressed), `${k} pressed`).toBeGreaterThanOrEqual(4.5)
+        expect(contrast(p.accentText, p.accentFill), 'button').toBeGreaterThanOrEqual(4.5)
+        for (const k of ['faint', 'liked'] as const) expect(contrast(p[k], p.bg), k).toBeGreaterThanOrEqual(3)
+        expect(contrast(SEE_MORE_COLOR[scheme][side as 'yes' | 'no'], p.bg), 'See more').toBeGreaterThanOrEqual(4.5)
+      })
+    }
+    it(`${scheme}: the no side's border shows against the page`, () => {
+      // The no card shares the page's background, so its outline is all that marks it out.
+      expect(contrast(SIDE_BORDER, SIDE_PALETTES[scheme].no.bg)).toBeGreaterThanOrEqual(3)
     })
   }
-  it('matches the spec: yes is purple with black text, no is black with purple text', () => {
-    expect(SIDE_PALETTES.yes.text).toBe('#000000')
-    expect(SIDE_PALETTES.no.bg).toBe('#000000')
-    expect(SIDE_PALETTES.no.border).toBe(SIDE_PALETTES.yes.bg)
+  it('matches the spec: yes is purple, black text in dark mode and white in light; no takes the page background', () => {
+    expect(SIDE_PALETTES.dark.yes.text).toBe('#000000')
+    expect(SIDE_PALETTES.light.yes.text).toBe('#ffffff')
+    expect(SIDE_PALETTES.dark.no.bg).toBe('#000000')
+    expect(SIDE_PALETTES.light.no.bg).toBe('#ffffff')
+    expect(SIDE_BORDER).toBe(SIDE_PALETTES.dark.yes.bg)
   })
-})
-
-import { SEE_MORE_COLOR } from './collapse.ts'
-it('the "See more" toggle is readable on both sides', () => {
-  for (const side of ['yes', 'no'] as const) expect(contrast(SEE_MORE_COLOR[side], SIDE_PALETTES[side].bg)).toBeGreaterThanOrEqual(4.5)
+  it('follows the system scheme as Warpstack does', () => {
+    expect(schemeOf('dark')).toBe('dark')
+    expect(schemeOf('light')).toBe('light')
+    expect(schemeOf(null)).toBe('light')
+  })
 })

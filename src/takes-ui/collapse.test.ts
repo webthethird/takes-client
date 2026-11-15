@@ -4,13 +4,15 @@ import { COLLAPSE_OVER, collapseFor, estimatedLines, shouldCollapse } from './co
 describe('collapsing extra-long casts', () => {
   it('leaves ordinary casts alone', () => {
     expect(shouldCollapse('My most controversial take is that the only thing ketchup is ideal for is hot dogs')).toBe(false)
-    expect(collapseFor('short', 'no')).toBeUndefined()
+    expect(collapseFor('short', 'no', 'dark')).toBeUndefined()
     expect(shouldCollapse('x'.repeat(45 * COLLAPSE_OVER))).toBe(false) // exactly at the limit
   })
   it('collapses a long single paragraph', () => {
     expect(shouldCollapse('x'.repeat(45 * COLLAPSE_OVER + 1))).toBe(true)
-    expect(collapseFor('x'.repeat(1000), 'no')).toEqual({ lines: 6, color: '#ffffff' })
-    expect(collapseFor('x'.repeat(1000), 'yes')).toEqual({ lines: 6, color: '#000000' })
+    expect(collapseFor('x'.repeat(1000), 'no', 'dark')).toEqual({ lines: 6, color: '#ffffff' })
+    expect(collapseFor('x'.repeat(1000), 'no', 'light')).toEqual({ lines: 6, color: '#000000' })
+    expect(collapseFor('x'.repeat(1000), 'yes', 'light')).toEqual({ lines: 6, color: '#ffffff' })
+    expect(collapseFor('x'.repeat(1000), 'yes', 'dark')).toEqual({ lines: 6, color: '#000000' })
   })
   it('counts line breaks: a list of short lines is long too', () => {
     const list = Array.from({ length: 12 }, (_, i) => `${i + 1}. point`).join('\n')

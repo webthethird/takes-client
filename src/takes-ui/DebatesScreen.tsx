@@ -9,11 +9,11 @@ import { Cast } from '@warpstack/contract'
 import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
 import { useMemo, type ReactNode } from 'react'
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useColorScheme, View } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { collapseFor } from './collapse.ts'
-import { opposite, SIDE_PALETTES, type Side } from './side-palette.ts'
+import { opposite, schemeOf, SIDE_BORDER, SIDE_PALETTES, type Scheme, type Side } from './side-palette.ts'
 
 const Item = z.object({
   cast: Cast,
@@ -45,6 +45,10 @@ const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> =
   return Feed.parse(await res.json())
 }
 
+/** The system color scheme, as Warpstack's useColors reads it, for picking side palettes. */
+const useScheme = (): Scheme => schemeOf(useColorScheme())
+const useSidePalette = (side: Side) => SIDE_PALETTES[useScheme()][side]
+
 const laneLabel = (i: Item) =>
   i.resurfaced ? 'Resurfaced · still unsettled' : i.following ? 'From someone you follow' : 'Across Farcaster'
 
@@ -61,14 +65,14 @@ const sideCounts = (i: Item) => ({
 const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
   side: Side; title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
 }) => {
-  const c = SIDE_PALETTES[side]
+  const c = useSidePalette(side)
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${count}. ${aiHint ? 'AI-suggested angle: ' : ''}${hint}`}
       onPress={onPress}
       style={({ pressed }) => ({
-        flexGrow: 1, flexBasis: 150, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 12,
+        flexGrow: 1, flexBasis: 150, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 12,
         backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 12, paddingVertical: 10, gap: 4,
       })}>
       <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
@@ -101,7 +105,7 @@ const useReply = (item: Item) => {
  * the side boxes, in the side's colors, without the AI example text.
  */
 const SideButton = ({ side, title, count, onPress }: { side: Side; title: string; count: number; onPress: () => void }) => {
-  const c = SIDE_PALETTES[side]
+  const c = useSidePalette(side)
   const people = `${count} ${count === 1 ? 'person' : 'people'}`
   return (
     <Pressable
@@ -109,7 +113,7 @@ const SideButton = ({ side, title, count, onPress }: { side: Side; title: string
       accessibilityLabel={`${title}. ${people} so far`}
       onPress={onPress}
       style={({ pressed }) => ({
-        flexDirection: 'row', alignItems: 'center', gap: 6, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 999,
+        flexDirection: 'row', alignItems: 'center', gap: 6, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 999,
         backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 14, paddingVertical: 7,
       })}>
       <Text style={{ color: c.text, fontSize: 14, fontWeight: '600' }}>{title}</Text>
@@ -164,23 +168,26 @@ const SidePrompt = ({ item }: { item: Item }) => {
  * A cast in its side's colors: the stock CastCard, rendered with that side's palette. The
  * card's own bottom hairline is tucked under the frame's border.
  */
-const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => (
-  <ColorsOverride.Provider value={SIDE_PALETTES[side]}>
-    <View style={{
-      marginHorizontal: 16, marginVertical: 8, borderRadius: 12, borderWidth: 1, overflow: 'hidden',
-      borderColor: SIDE_PALETTES.no.border, backgroundColor: SIDE_PALETTES[side].bg,
-    }}>
-      <View style={{ marginBottom: -StyleSheet.hairlineWidth }}>{children}</View>
-    </View>
-  </ColorsOverride.Provider>
-)
+const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => {
+  const palette = useSidePalette(side)
+  return (
+    <ColorsOverride.Provider value={palette}>
+      <View style={{
+        marginHorizontal: 16, marginVertical: 8, borderRadius: 12, borderWidth: 1, overflow: 'hidden',
+        borderColor: SIDE_BORDER, backgroundColor: palette.bg,
+      }}>
+        <View style={{ marginBottom: -StyleSheet.hairlineWidth }}>{children}</View>
+      </View>
+    </ColorsOverride.Provider>
+  )
+}
 
 const authorName = (cast: Item['cast']) => cast.author.displayName || cast.author.username || `fid:${cast.fid}`
 
 /** "<author> says Yes": which answer to the question the cast argues, as a chip in that side's colors. */
 const AuthorSide = ({ item }: { item: Item }) => {
   const c = useColors()
-  const side = SIDE_PALETTES[item.authorStance]
+  const side = useSidePalette(item.authorStance)
   const answer = item.authorStance === 'yes' ? 'Yes' : 'No'
   return (
     <View accessible accessibilityLabel={`${authorName(item.cast)} says ${answer}`}
@@ -189,7 +196,7 @@ const AuthorSide = ({ item }: { item: Item }) => {
         <Text style={{ color: c.text, fontWeight: '600' }}>{authorName(item.cast)}</Text> says
       </Text>
       <View style={{
-        backgroundColor: side.bg, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 999,
+        backgroundColor: side.bg, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 999,
         paddingHorizontal: 10, paddingVertical: 2,
       }}>
         <Text style={{ color: side.text, fontSize: 13, fontWeight: '700' }}>{answer}</Text>
@@ -200,6 +207,7 @@ const AuthorSide = ({ item }: { item: Item }) => {
 
 const DebateCard = ({ item }: { item: Item }) => {
   const c = useColors()
+  const scheme = useScheme()
   return (
     <View style={{ borderBottomColor: c.border, borderBottomWidth: 1, paddingTop: 12, paddingBottom: 8 }}>
       <View style={{ paddingHorizontal: 16, gap: 4 }}>
@@ -209,13 +217,13 @@ const DebateCard = ({ item }: { item: Item }) => {
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
         <AuthorSide item={item} />
       </View>
-      <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance)} /></SideFrame>
+      <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance, scheme)} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>
         {item.rebuttal ? (
           <>
             <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>Someone already disagrees</Text>
             <View style={{ marginHorizontal: -16 }}>
-              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance))} /></SideFrame>
+              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance), scheme)} /></SideFrame>
             </View>
           </>
         ) : (
