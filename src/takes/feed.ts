@@ -11,6 +11,7 @@
 
 import { TakesStore } from './adapters/store.ts'
 import { matchCasing } from './core/text.ts'
+import { fillPage } from './core/page.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
   FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
@@ -66,12 +67,24 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   if (auth) headers.set('authorization', auth)
   const ip = req.headers.get('cf-connecting-ip')
   if (ip) headers.set('cf-connecting-ip', ip)
-  const castOf = async (fid: number, hash: string): Promise<unknown | 'unauthorized' | null> => {
-    const res = await warp(new Request(new URL(`/api/casts/${fid}/${hash}`, url.origin), { headers }), env, ctx)
+  /**
+   * The cast as Warpstack serves it; 'gone' when it no longer exists (404, or not live);
+   * 'unavailable' when it couldn't be read just now: a rate limit (429), a node failure (5xx),
+   * or an exception. Only 'gone' may be skipped for good (fillPage).
+   */
+  const castOf = async (fid: number, hash: string): Promise<object | 'gone' | 'unavailable' | 'unauthorized'> => {
+    let res: Response
+    try {
+      res = await warp(new Request(new URL(`/api/casts/${fid}/${hash}`, url.origin), { headers }), env, ctx)
+    } catch {
+      return 'unavailable'
+    }
     if (res.status === 401) return 'unauthorized'
-    if (!res.ok) return null
+    if (res.status === 429 || res.status >= 500) return 'unavailable'
+    if (!res.ok) return 'gone'
     const body = (await res.json()) as { cast?: { state?: string; cast?: unknown } }
-    return body.cast?.state === 'live' ? body.cast.cast ?? null : null
+    const cast = body.cast?.state === 'live' ? body.cast.cast : undefined
+    return typeof cast === 'object' && cast !== null ? cast : 'gone'
   }
 
   const hydrated = await Promise.all(slots.map(async ({ item: row, resurfaced, after }) => {
@@ -81,18 +94,20 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     ])
     return { row, resurfaced, after, cast, rebuttal }
   }))
-  if (hydrated.some(h => h.cast === 'unauthorized')) return unauthorized()
-
-  // Walk in rank order until the page is full. The cursor is the position past the last row
-  // examined, kept or skipped, so a deleted cast is never re-examined on the next page.
-  let next: FeedCursor = at
-  const kept: typeof hydrated = []
+  type Loaded = object | 'gone' | 'unavailable'
+  const rows: Array<{ row: (typeof hydrated)[number]['row']; resurfaced: boolean; after: FeedCursor; cast: Loaded; rebuttal: Loaded | null }> = []
   for (const h of hydrated) {
-    if (kept.length === limit) break
-    next = h.after
-    if (h.cast !== null) kept.push(h)
+    if (h.cast === 'unauthorized' || h.rebuttal === 'unauthorized') return unauthorized()
+    rows.push({ ...h, cast: h.cast, rebuttal: h.rebuttal })
   }
-  const exhausted = next.ff >= freshLanes.following.length && next.fo >= freshLanes.others.length &&
+
+  // Rank order until the page is full. A deleted cast is skipped for good; an unavailable one
+  // ends the page early, so it's retried rather than lost.
+  const { kept, next, stalled } = fillPage<object, FeedCursor, (typeof rows)[number]>(rows, at, limit)
+  if (stalled && kept.length === 0) {
+    return json({ defined: true, code: 'RATE_LIMITED', message: 'The feed is busy; try again in a minute', data: { retryAfter: 60 } }, 429)
+  }
+  const exhausted = !stalled && next.ff >= freshLanes.following.length && next.fo >= freshLanes.others.length &&
     next.of >= oldLanes.following.length && next.oo >= oldLanes.others.length
 
   // An empty suggestion was declined: sent as null so the boxes fall back to static copy.
@@ -105,7 +120,8 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const items = kept
     .map(({ row, resurfaced, cast, rebuttal }) => ({
       cast,
-      rebuttal: rebuttal === 'unauthorized' ? null : rebuttal,
+      // A deleted rebuttal shows as none.
+      rebuttal: rebuttal === 'gone' ? null : rebuttal,
       question: row.question,
       challengeReason: row.challenge_reason,
       // Casing is matched here, at read time, so a casing-rule change needs no regeneration.

@@ -38,6 +38,8 @@ const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> =
   const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
   const res = await fetch(`${apiUrl}/api/takes/feed${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 401) throw new Error('This server is private. Sign in on the phone app to see the feed.')
+  // The server ends a page early rather than skip cards it couldn't read; retrying resumes there.
+  if (res.status === 429) throw new Error('The feed is busy. Try again in a minute.')
   if (!res.ok) throw new Error(`The feed did not load (${res.status}).`)
   // Parsed at the boundary: a malformed card fails loudly instead of rendering half a cast.
   return Feed.parse(await res.json())
