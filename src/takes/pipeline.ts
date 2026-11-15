@@ -20,6 +20,7 @@ import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
 import { runMerge, type MergeReport } from './merge.ts'
 import { cardTopics, fromAssignment, TOPIC_VERSION, type StoredTopics } from './core/topics.ts'
+import { splitEmbeds } from './core/text.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
   NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces,
@@ -164,8 +165,9 @@ export const runScoringPass = async (
       if (!spend()) return 'stop'
       try {
         const quote = cast.quoted ? quoted.get(cast.quoted.hash) : undefined
+        // Images go to the model as images (new casts only: earlier ones aren't re-classified).
         const r = await classifier.classifyCast({
-          text: names.render(cast), links: cast.urls, ...(quote ? { quoted: names.render(quote) } : {}),
+          text: names.render(cast), ...splitEmbeds(cast.urls), ...(quote ? { quoted: names.render(quote) } : {}),
         })
         const base = { hash: cast.hash, fid: cast.fid, ts: cast.ts, lane, now }
         if (isDeclined(r)) {
@@ -208,8 +210,10 @@ export const runScoringPass = async (
       await pool(need.map(root => async () => {
         if (!spend()) return 'stop'
         try {
-          const text = names.render(rootCasts.get(root.hash)!)
-          const r = await classifier.suggest({ text, question: root.claim.question, answer: root.claim.answer })
+          const cast = rootCasts.get(root.hash)!
+          const r = await classifier.suggest({
+            text: names.render(cast), question: root.claim.question, answer: root.claim.answer, images: splitEmbeds(cast.urls).images,
+          })
           if (isDeclined(r)) {
             // Recorded empty, or it would be retried every minute; the boxes fall back to static copy.
             report.declined++
@@ -245,7 +249,8 @@ export const runScoringPass = async (
         const file = (topics: StoredTopics, reason: string) =>
           store.putTopics({ marketId, version: TOPIC_VERSION, topics, reason: reason.slice(0, 200), now })
         try {
-          const r = await classifier.assignTopic({ question: root.claim.question, text: names.render(rootCasts.get(root.hash)!) })
+          const cast = rootCasts.get(root.hash)!
+          const r = await classifier.assignTopic({ question: root.claim.question, text: names.render(cast), images: splitEmbeds(cast.urls).images })
           if (isDeclined(r)) {
             report.declined++
             await file({ primary: 'other', secondary: null }, r.reason)

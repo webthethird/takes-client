@@ -41,6 +41,18 @@ export const parseEmbeds = (json: string): { urls: string[]; quoted: { fid: numb
   return { urls, quoted }
 }
 
+/**
+ * Whether a link embed is an image, by URL: Farcaster's image host (imagedelivery.net), imgur,
+ * or an image file extension. Not fetched; a URL that only looks like an image fails the model
+ * call, which retries without images (adapters/claude.ts).
+ */
+export const isImageUrl = (u: string): boolean =>
+  /^https:\/\/(imagedelivery\.net|i\.imgur\.com)\//.test(u) || /^https?:\/\/[^?#]+\.(jpe?g|png|gif|webp)([?#]|$)/i.test(u)
+
+/** A cast's link embeds split into images (sent to the model as images) and other links. */
+export const splitEmbeds = (urls: readonly string[]): { images: string[]; links: string[] } =>
+  ({ images: urls.filter(isImageUrl), links: urls.filter(u => !isImageUrl(u)) })
+
 export const parseMentions = (json: string): Mention[] => {
   let list: unknown
   try { list = JSON.parse(json) } catch { return [] }

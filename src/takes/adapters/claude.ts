@@ -25,9 +25,9 @@ export interface Classifier {
   /** Merge: is `candidate` the same market as `existing`, and does YES mean the same in both? */
   adjudicateMarket(i: { existing: string; candidate: string }): Promise<MarketVerdict | Declined>
   /** Suggest: one reply per side, in the cast's own voice. */
-  suggest(i: { text: string; question: string; answer: 'yes' | 'no' }): Promise<Suggestions | Declined>
+  suggest(i: { text: string; question: string; answer: 'yes' | 'no'; images?: readonly string[] }): Promise<Suggestions | Declined>
   /** Topic: which tabs a market's question belongs under, read with the cast it came from. */
-  assignTopic(i: { question: string; text: string }): Promise<TopicAssignment | Declined>
+  assignTopic(i: { question: string; text: string; images?: readonly string[] }): Promise<TopicAssignment | Declined>
 }
 
 /**
@@ -35,9 +35,38 @@ export interface Classifier {
  * URLs are context, the way the classifier's `<parent>` and `<embedded_link>` tags were: a
  * quote cast is often a take ON the quoted cast, and is unreadable without it.
  */
-export type CastInput = { text: string; quoted?: string; links?: readonly string[] }
+export type CastInput = { text: string; quoted?: string; links?: readonly string[]; images?: readonly string[] }
 
 export const isDeclined = (r: object): r is Declined => 'declined' in r
+
+/**
+ * Runs `call` with the cast's images and, if the API rejects that request (a 400: typically an
+ * image it couldn't fetch, deleted or not really an image), once more without them, so a cast is
+ * never lost to its picture. Any other error, or a 400 on the retry, goes to the caller as before.
+ */
+export const retryWithoutImages = async <T>(images: readonly string[] | undefined, call: (images: readonly string[] | undefined) => Promise<T>): Promise<T> => {
+  try {
+    return await call(images)
+  } catch (e) {
+    if (images && images.length > 0 && e instanceof Anthropic.BadRequestError) return call(undefined)
+    throw e
+  }
+}
+
+/**
+ * A user turn with the cast's images (URLs, at most 4: a cast's embed limit) ahead of the text,
+ * as takes-classifier's classifyCast sends them. Anthropic fetches each URL; one it can't fetch
+ * fails the request. With no images the turn is the plain text, unchanged.
+ */
+export const withImages = (text: string, images: readonly string[] | undefined): string | Anthropic.ContentBlockParam[] => {
+  const urls = (images ?? []).slice(0, 4)
+  if (urls.length === 0) return text
+  return [
+    { type: 'text', text: `The cast has ${urls.length === 1 ? 'this image' : `these ${urls.length} images`} attached; they are part of what it says.` },
+    ...urls.map((url): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'url', url } })),
+    { type: 'text', text },
+  ]
+}
 
 export class ClaudeClassifier implements Classifier {
   private readonly client: Anthropic
@@ -47,7 +76,11 @@ export class ClaudeClassifier implements Classifier {
     this.client = new Anthropic({ apiKey, timeout: 60_000 })
   }
 
-  async classifyCast(i: CastInput): Promise<ClassifyResult | Declined> {
+  classifyCast(i: CastInput): Promise<ClassifyResult | Declined> {
+    return retryWithoutImages(i.images, images => this.classifyOnce({ ...i, images }))
+  }
+
+  private async classifyOnce(i: CastInput): Promise<ClassifyResult | Declined> {
     const parts = [
       ...(i.quoted ? [`<quoted_cast>${i.quoted}</quoted_cast>`] : []),
       ...(i.links ?? []).map(u => `<embedded_link>${u}</embedded_link>`),
@@ -57,7 +90,7 @@ export class ClaudeClassifier implements Classifier {
       model: MODEL,
       max_tokens: 4096,
       system: [{ type: 'text', text: CLASSIFY_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: parts.join('\n\n') }],
+      messages: [{ role: 'user', content: withImages(parts.join('\n\n'), i.images) }],
       output_config: { effort: 'low', format: zodOutputFormat(ClassifyResult) },
     })
     if (r.stop_reason === 'refusal') return { declined: true, reason: `refused: ${r.stop_details?.category ?? 'unspecified'}` }
@@ -69,14 +102,18 @@ export class ClaudeClassifier implements Classifier {
     return adjudicateWith(this.client, i)
   }
 
-  async suggest(i: { text: string; question: string; answer: 'yes' | 'no' }): Promise<Suggestions | Declined> {
+  suggest(i: { text: string; question: string; answer: 'yes' | 'no'; images?: readonly string[] }): Promise<Suggestions | Declined> {
+    return retryWithoutImages(i.images, images => this.suggestOnce({ ...i, images }))
+  }
+
+  private async suggestOnce(i: { text: string; question: string; answer: 'yes' | 'no'; images?: readonly string[] }): Promise<Suggestions | Declined> {
     const r = await this.client.messages.parse({
       model: MODEL,
       max_tokens: 2048,
       system: [{ type: 'text', text: SUGGEST_PROMPT, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
-        content: `<cast>${i.text}</cast>\n\n<question>${i.question}</question>\n\n<answer>${i.answer}</answer>`,
+        content: withImages(`<cast>${i.text}</cast>\n\n<question>${i.question}</question>\n\n<answer>${i.answer}</answer>`, i.images),
       }],
       output_config: { effort: 'low', format: zodOutputFormat(Suggestions) },
     })
@@ -85,12 +122,16 @@ export class ClaudeClassifier implements Classifier {
     return r.parsed_output
   }
 
-  async assignTopic(i: { question: string; text: string }): Promise<TopicAssignment | Declined> {
+  assignTopic(i: { question: string; text: string; images?: readonly string[] }): Promise<TopicAssignment | Declined> {
+    return retryWithoutImages(i.images, images => this.assignTopicOnce({ ...i, images }))
+  }
+
+  private async assignTopicOnce(i: { question: string; text: string; images?: readonly string[] }): Promise<TopicAssignment | Declined> {
     const r = await this.client.messages.parse({
       model: MODEL,
       max_tokens: 2048,
       system: [{ type: 'text', text: TOPIC_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: `<question>${i.question}</question>\n<cast>${i.text}</cast>` }],
+      messages: [{ role: 'user', content: withImages(`<question>${i.question}</question>\n<cast>${i.text}</cast>`, i.images) }],
       output_config: { effort: 'low', format: zodOutputFormat(TopicAssignment) },
     })
     if (r.stop_reason === 'refusal') return { declined: true, reason: `refused: ${r.stop_details?.category ?? 'unspecified'}` }

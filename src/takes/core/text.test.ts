@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseEmbeds, parseMentions, renderMentions } from './text.ts'
+import { parseEmbeds, parseMentions, renderMentions, splitEmbeds } from './text.ts'
 
 const names = new Map([[1, 'alice'], [2, 'bob']])
 
@@ -61,5 +61,24 @@ describe('matchCasing', () => {
   })
   it('leaves a reply alone when the cast has no letters to judge by', () => {
     expect(matchCasing('🤯🤯', 'wild')).toBe('wild')
+  })
+})
+
+describe('splitEmbeds', () => {
+  it('sends Farcaster-hosted and image-file links as images, everything else as links', () => {
+    const r = splitEmbeds([
+      'https://imagedelivery.net/BXluQx4ige9GuW0Ia56BHw/711f0659-fe31-416b-4830-a5b7d379c200/original',
+      'https://i.imgur.com/abc.png',
+      'https://example.com/photo.JPG?w=800',
+      'https://example.com/article',
+      'https://example.com/file.png.html',
+      'https://farcaster.xyz/miniapps/x/y',
+    ])
+    expect(r.images).toEqual([
+      'https://imagedelivery.net/BXluQx4ige9GuW0Ia56BHw/711f0659-fe31-416b-4830-a5b7d379c200/original',
+      'https://i.imgur.com/abc.png',
+      'https://example.com/photo.JPG?w=800',
+    ])
+    expect(r.links).toEqual(['https://example.com/article', 'https://example.com/file.png.html', 'https://farcaster.xyz/miniapps/x/y'])
   })
 })
