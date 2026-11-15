@@ -13,7 +13,7 @@ import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Tex
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { collapseFor } from './collapse.ts'
-import { opposite, schemeOf, SIDE_BORDER, SIDE_PALETTES, type Scheme, type Side } from './side-palette.ts'
+import { CAST_BODY, opposite, schemeOf, SIDE_BORDER, SIDE_BORDER_WIDTH, SIDE_PALETTES, type Scheme, type Side } from './side-palette.ts'
 
 const Item = z.object({
   cast: Cast,
@@ -173,7 +173,7 @@ const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => {
   return (
     <ColorsOverride.Provider value={palette}>
       <View style={{
-        marginHorizontal: 16, marginVertical: 8, borderRadius: 12, borderWidth: 1, overflow: 'hidden',
+        marginHorizontal: 16, marginVertical: 8, borderRadius: 12, borderWidth: SIDE_BORDER_WIDTH[side], overflow: 'hidden',
         borderColor: SIDE_BORDER, backgroundColor: palette.bg,
       }}>
         <View style={{ marginBottom: -StyleSheet.hairlineWidth }}>{children}</View>
@@ -217,13 +217,13 @@ const DebateCard = ({ item }: { item: Item }) => {
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
         <AuthorSide item={item} />
       </View>
-      <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance, scheme)} /></SideFrame>
+      <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance, scheme)} textColor={CAST_BODY[scheme][item.authorStance]} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>
         {item.rebuttal ? (
           <>
             <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>Someone already disagrees</Text>
             <View style={{ marginHorizontal: -16 }}>
-              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance), scheme)} /></SideFrame>
+              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance), scheme)} textColor={CAST_BODY[scheme][opposite(item.authorStance)]} /></SideFrame>
             </View>
           </>
         ) : (

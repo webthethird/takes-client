@@ -23,10 +23,10 @@ index c8231d4472b6db70c8866793bb5aff5e9a14f8af..d766ba01cbc7b4d6426239ade1186bcb
  //# sourceMappingURL=index.js.map
 \ No newline at end of file
 diff --git a/dist/slots.d.ts b/dist/slots.d.ts
-index f0a0a420fd4e450425236713ce4b5dc83f723fb7..227184f400476efee0d529c937f6fb08d57fb4ee 100644
+index f0a0a420fd4e450425236713ce4b5dc83f723fb7..7dc98571cbcfc4aab4ee649b7c6fa490d8175d0f 100644
 --- a/dist/slots.d.ts
 +++ b/dist/slots.d.ts
-@@ -28,16 +28,22 @@ export declare const ExternalLink: ({ url, children, style }: {
+@@ -28,16 +28,25 @@ export declare const ExternalLink: ({ url, children, style }: {
      children: ReactNode;
      style?: TextStyle | undefined;
  }) => import("react").JSX.Element;
@@ -35,37 +35,42 @@ index f0a0a420fd4e450425236713ce4b5dc83f723fb7..227184f400476efee0d529c937f6fb08
 +    lines: number;
 +    color: string;
 +};
-+export declare const CastText: ({ cast, large, collapse }: {
++export declare const CastText: ({ cast, large, collapse, color }: {
      cast: Pick<Cast, "text" | "mentions">;
      large?: boolean;
 +    collapse?: Collapse | undefined;
++    color?: string | undefined;
  }) => import("react").JSX.Element | null;
  export type Emphasis = 'root' | 'ancestor' | 'default';
  /** A cast. Tapping it opens its thread; its timestamp is a real link, for keyboards and new tabs. */
 -export declare const CastCard: ({ cast, emphasis, threadRoot }: {
-+export declare const CastCard: ({ cast, emphasis, threadRoot, collapse }: {
++export declare const CastCard: ({ cast, emphasis, threadRoot, collapse, textColor }: {
      cast: Cast;
      emphasis?: Emphasis;
      threadRoot?: string;
 +    collapse?: Collapse | undefined;
++    /** The body text's color, when it should differ from the palette's `text` (which names keep). */
++    textColor?: string | undefined;
  }) => import("react").JSX.Element;
  export declare const Message: ({ children, tone }: {
      children: ReactNode;
 diff --git a/dist/slots.js b/dist/slots.js
-index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..0b4a283581bc8d9bb730e4b675159e162a1f85cb 100644
+index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..5d08e518471380640b147630448626bffbd9cf2d 100644
 --- a/dist/slots.js
 +++ b/dist/slots.js
-@@ -80,12 +80,21 @@ const shownText = (cast) => {
+@@ -80,12 +80,22 @@ const shownText = (cast) => {
      }
      return cast;
  };
 -export const CastText = ({ cast, large }) => {
-+// Takes patch: `collapse` clamps the text to a number of lines, with a toggle to expand it.
++// Takes patch: `collapse` clamps the text to a number of lines, with a toggle to expand it;
++// `color` sets the body text's color apart from the palette's (names keep `text`).
 +// The caller decides which casts are long enough to collapse.
-+export const CastText = ({ cast, large, collapse }) => {
++export const CastText = ({ cast, large, collapse, color }) => {
      const c = useColors();
+-    const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: c.text }];
 +    const [expanded, setExpanded] = useState(false);
-     const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: c.text }];
++    const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: color ?? c.text }];
      if (!cast.text)
          return null;
 -    return (_jsx(Text, { style: base, selectable: true, children: castSegments(cast).map((s, i) => {
@@ -79,21 +84,21 @@ index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..0b4a283581bc8d9bb730e4b675159e16
              switch (s.kind) {
                  case 'text': return _jsx(Text, { children: s.text }, i);
                  case 'mention': return (_jsxs(Link, { href: routes.profile(s.fid), style: { color: c.accent }, children: ["@", s.username ?? `fid:${s.fid}`] }, i));
-@@ -183,7 +192,7 @@ const count = (n, exact) => (n === 0 ? '' : `${n.toLocaleString()}${exact ? '' :
+@@ -183,7 +193,7 @@ const count = (n, exact) => (n === 0 ? '' : `${n.toLocaleString()}${exact ? '' :
  // The Farcaster client's action colors: green for your recast, crimson for your like.
  const RECASTED = '#14ae5c';
  /** A cast. Tapping it opens its thread; its timestamp is a real link, for keyboards and new tabs. */
 -export const CastCard = ({ cast, emphasis = 'default', threadRoot }) => {
-+export const CastCard = ({ cast, emphasis = 'default', threadRoot, collapse }) => {
++export const CastCard = ({ cast, emphasis = 'default', threadRoot, collapse, textColor }) => {
      const c = useColors();
      const router = useRouter();
      const open = () => {
-@@ -201,7 +210,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }) => {
+@@ -201,7 +211,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }) => {
      return (_jsxs(Pressable, { onPress: open, disabled: root, accessible: false, style: ({ pressed }) => [styles.cast, { borderBottomColor: c.border, borderBottomWidth: emphasis === 'ancestor' ? 0 : StyleSheet.hairlineWidth },
              emphasis === 'ancestor' && { paddingBottom: 0 }, pressed && !root && { backgroundColor: c.pressed }], children: [_jsxs(View, { style: { alignItems: 'center' }, children: [_jsx(Link, { href: routes.profile(cast.fid), asChild: true, children: _jsx(Pressable, { accessibilityRole: "link", accessibilityLabel: `${nameOf(cast.author)}'s profile`, children: _jsx(Avatar, { user: cast.author, size: AVATAR }) }) }), emphasis === 'ancestor' && _jsx(View, { style: [styles.rail, { backgroundColor: c.border }] })] }), _jsxs(View, { style: { flex: 1, minWidth: 0, paddingBottom: emphasis === 'ancestor' ? space.md : 0 }, children: [parent && emphasis !== 'ancestor' && !(parent.kind === 'cast' && parent.ref.hash === threadRoot) && (_jsx(Text, { style: [type.small, { color: c.muted, marginBottom: space.xxs }], numberOfLines: 1, children: parent.kind === 'cast'
                              ? _jsxs(_Fragment, { children: ["Replying to ", _jsx(Link, { href: routes.thread(parent.ref), style: { color: c.accent }, children: "a cast" })] })
 -                            : parent.kind === 'channel' ? _jsxs(_Fragment, { children: ["in ", _jsxs(Link, { href: routes.channel(parent.key), style: { color: c.accent }, children: ["/", parent.key] })] }) : null })), _jsxs(View, { style: [styles.row, { marginBottom: 0 }], children: [_jsx(Link, { href: routes.profile(cast.fid), style: StyleSheet.flatten([type.name, { color: c.text, flexShrink: 1 }]), numberOfLines: 1, children: nameOf(cast.author) }), cast.author.username && _jsxs(Text, { style: [type.meta, { color: c.muted, flexShrink: 2 }], numberOfLines: 1, children: ["@", cast.author.username] }), _jsx(Text, { style: [type.meta, { color: c.muted }], children: "\u00B7" }), _jsx(Link, { href: routes.thread(cast), style: StyleSheet.flatten([type.meta, { color: c.muted, flexShrink: 0 }]), accessibilityLabel: `Open thread, posted ${new Date(cast.ts * 1_000).toLocaleString()}`, children: relativeTime(cast.ts, now()) })] }), _jsx(CastText, { cast: shownText(cast), large: root }), _jsx(Embeds, { cast: cast }), _jsx(CastFooter, { cast: cast, root: root })] })] }));
-+                            : parent.kind === 'channel' ? _jsxs(_Fragment, { children: ["in ", _jsxs(Link, { href: routes.channel(parent.key), style: { color: c.accent }, children: ["/", parent.key] })] }) : null })), _jsxs(View, { style: [styles.row, { marginBottom: 0 }], children: [_jsx(Link, { href: routes.profile(cast.fid), style: StyleSheet.flatten([type.name, { color: c.text, flexShrink: 1 }]), numberOfLines: 1, children: nameOf(cast.author) }), cast.author.username && _jsxs(Text, { style: [type.meta, { color: c.muted, flexShrink: 2 }], numberOfLines: 1, children: ["@", cast.author.username] }), _jsx(Text, { style: [type.meta, { color: c.muted }], children: "\u00B7" }), _jsx(Link, { href: routes.thread(cast), style: StyleSheet.flatten([type.meta, { color: c.muted, flexShrink: 0 }]), accessibilityLabel: `Open thread, posted ${new Date(cast.ts * 1_000).toLocaleString()}`, children: relativeTime(cast.ts, now()) })] }), _jsx(CastText, { cast: shownText(cast), large: root, collapse: collapse }), _jsx(Embeds, { cast: cast }), _jsx(CastFooter, { cast: cast, root: root })] })] }));
++                            : parent.kind === 'channel' ? _jsxs(_Fragment, { children: ["in ", _jsxs(Link, { href: routes.channel(parent.key), style: { color: c.accent }, children: ["/", parent.key] })] }) : null })), _jsxs(View, { style: [styles.row, { marginBottom: 0 }], children: [_jsx(Link, { href: routes.profile(cast.fid), style: StyleSheet.flatten([type.name, { color: c.text, flexShrink: 1 }]), numberOfLines: 1, children: nameOf(cast.author) }), cast.author.username && _jsxs(Text, { style: [type.meta, { color: c.muted, flexShrink: 2 }], numberOfLines: 1, children: ["@", cast.author.username] }), _jsx(Text, { style: [type.meta, { color: c.muted }], children: "\u00B7" }), _jsx(Link, { href: routes.thread(cast), style: StyleSheet.flatten([type.meta, { color: c.muted, flexShrink: 0 }]), accessibilityLabel: `Open thread, posted ${new Date(cast.ts * 1_000).toLocaleString()}`, children: relativeTime(cast.ts, now()) })] }), _jsx(CastText, { cast: shownText(cast), large: root, collapse: collapse, color: textColor }), _jsx(Embeds, { cast: cast }), _jsx(CastFooter, { cast: cast, root: root })] })] }));
  };
  /**
   * The cast a thread is about, laid out as the Farcaster client does: avatar beside the name,
@@ -140,7 +145,7 @@ index ef8e27fec4b16e71602422f7b3b07d21aa82c013..fda9b71aa4f61d2af7a83bb35c3f69b1
 -export { BottomInset, HIT, HUES, radius, space, type, useBottomInset, useColors } from './theme.ts'
 +export { BottomInset, ColorsOverride, HIT, HUES, radius, space, type, useBottomInset, useColors } from './theme.ts'
 diff --git a/src/slots.tsx b/src/slots.tsx
-index c4aa719560c295f7ade92ad72dff6945a3216bee..d0f53d0aa4d7869ec00e725c9456f8e102465c4d 100644
+index c4aa719560c295f7ade92ad72dff6945a3216bee..bfc3608520b877a6c2cd84cda9128e2cb07600de 100644
 --- a/src/slots.tsx
 +++ b/src/slots.tsx
 @@ -92,12 +92,16 @@ const shownText = (cast: Cast): Pick<Cast, 'text' | 'mentions'> => {
@@ -151,10 +156,11 @@ index c4aa719560c295f7ade92ad72dff6945a3216bee..d0f53d0aa4d7869ec00e725c9456f8e1
 +// Takes patch: `collapse` clamps the text to a number of lines, with a toggle to expand it.
 +// The caller decides which casts are long enough to collapse.
 +export type Collapse = { lines: number; color: string }
-+export const CastText = ({ cast, large, collapse }: { cast: Pick<Cast, 'text' | 'mentions'>; large?: boolean; collapse?: Collapse | undefined }) => {
++export const CastText = ({ cast, large, collapse, color }: { cast: Pick<Cast, 'text' | 'mentions'>; large?: boolean; collapse?: Collapse | undefined; color?: string | undefined }) => {
    const c = useColors()
+-  const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: c.text }]
 +  const [expanded, setExpanded] = useState(false)
-   const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: c.text }]
++  const base = [type.body, large && { fontSize: 17, lineHeight: 24 }, { color: color ?? c.text }]
    if (!cast.text) return null
 -  return (
 -    <Text style={base} selectable>
@@ -185,7 +191,7 @@ index c4aa719560c295f7ade92ad72dff6945a3216bee..d0f53d0aa4d7869ec00e725c9456f8e1
  
  /** A cast. Tapping it opens its thread; its timestamp is a real link, for keyboards and new tabs. */
 -export const CastCard = ({ cast, emphasis = 'default', threadRoot }: { cast: Cast; emphasis?: Emphasis; threadRoot?: string }) => {
-+export const CastCard = ({ cast, emphasis = 'default', threadRoot, collapse }: { cast: Cast; emphasis?: Emphasis; threadRoot?: string; collapse?: Collapse | undefined }) => {
++export const CastCard = ({ cast, emphasis = 'default', threadRoot, collapse, textColor }: { cast: Cast; emphasis?: Emphasis; threadRoot?: string; collapse?: Collapse | undefined; textColor?: string | undefined }) => {
    const c = useColors()
    const router = useRouter()
    const open = () => {
@@ -194,7 +200,7 @@ index c4aa719560c295f7ade92ad72dff6945a3216bee..d0f53d0aa4d7869ec00e725c9456f8e1
            </Link>
          </View>
 -        <CastText cast={shownText(cast)} large={root} />
-+        <CastText cast={shownText(cast)} large={root} collapse={collapse} />
++        <CastText cast={shownText(cast)} large={root} collapse={collapse} color={textColor} />
          <Embeds cast={cast} />
          <CastFooter cast={cast} root={root} />
        </View>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SEE_MORE_COLOR } from './collapse.ts'
-import { schemeOf, SIDE_BORDER, SIDE_PALETTES } from './side-palette.ts'
+import { CAST_BODY, schemeOf, SIDE_BORDER, SIDE_PALETTES } from './side-palette.ts'
 
 // WCAG 2 relative luminance and contrast ratio.
 const luminance = (hex: string) => {
@@ -22,6 +22,8 @@ describe('side palettes meet the contrast bar', () => {
         expect(contrast(p.accentText, p.accentFill), 'button').toBeGreaterThanOrEqual(4.5)
         for (const k of ['faint', 'liked'] as const) expect(contrast(p[k], p.bg), k).toBeGreaterThanOrEqual(3)
         expect(contrast(SEE_MORE_COLOR[scheme][side as 'yes' | 'no'], p.bg), 'See more').toBeGreaterThanOrEqual(4.5)
+        const body = CAST_BODY[scheme][side as 'yes' | 'no']
+        if (body) expect(contrast(body, p.bg), 'cast body').toBeGreaterThanOrEqual(4.5)
       })
     }
     it(`${scheme}: the no side's border shows against the page`, () => {
@@ -35,6 +37,8 @@ describe('side palettes meet the contrast bar', () => {
     expect(SIDE_PALETTES.dark.no.bg).toBe('#000000')
     expect(SIDE_PALETTES.light.no.bg).toBe('#ffffff')
     expect(SIDE_BORDER).toBe(SIDE_PALETTES.dark.yes.bg)
+    // The no side's body is the page's plain text color; its names stay purple.
+    expect(CAST_BODY).toEqual({ dark: { no: '#ffffff' }, light: { no: '#000000' } })
   })
   it('follows the system scheme as Warpstack does', () => {
     expect(schemeOf('dark')).toBe('dark')

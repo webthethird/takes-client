@@ -60,4 +60,17 @@ export const SIDE_PALETTES: Record<Scheme, Record<Side, Colors>> = {
   },
 }
 
+/**
+ * The cast body's color on each side's card, where it differs from the palette's text color:
+ * on the no side, the page's own text color (white in dark mode, black in light). Its name,
+ * handle and links stay purple; a whole cast in purple was too much. Undefined: use the palette.
+ */
+export const CAST_BODY: Record<Scheme, Partial<Record<Side, string>>> = {
+  dark: { no: '#ffffff' },
+  light: { no: '#000000' },
+}
+
+/** Card outlines: the no card shares the page's background, so its border carries it and is heavier. */
+export const SIDE_BORDER_WIDTH: Record<Side, number> = { yes: 1, no: 2 }
+
 export const opposite = (s: Side): Side => (s === 'yes' ? 'no' : 'yes')
