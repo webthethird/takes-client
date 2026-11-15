@@ -1,8 +1,9 @@
 // One scoring pass, run by the minute cron:
 //
-//   1. refresh the viewer's follows (on a TTL)
+//   1. refresh the viewer's follows (on a TTL), then a step of the archive walk (backfill.ts)
 //   2. stage 1 on new root casts: every one from people the viewer follows, and, from the
-//      rest of the network, those that drew attention (repliers or likes)
+//      rest of the network, those that drew attention (repliers or likes); and archived casts,
+//      from before the index begins, that drew repliers
 //   3. stage 2 on the threads of opinion roots: each new reply's stance on the root's question
 //   4. rescore every live card
 //
@@ -10,7 +11,9 @@
 // over waits for the next minute. Transient API errors end the pass early; nothing is lost.
 
 import { ClaudeClassifier, isDeclined, isTransient, type Classifier } from './adapters/claude.ts'
+import { Archive, Casts } from './adapters/archive.ts'
 import { CastIndex, type IndexedCast } from './adapters/cast-index.ts'
+import { runBackfillStep, type BackfillReport } from './backfill.ts'
 import { readFollows } from './adapters/node.ts'
 import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
@@ -45,6 +48,7 @@ export type PassReport = {
   dropped: number
   stoppedEarly?: string
   merge?: MergeReport
+  backfill?: BackfillReport
 }
 
 const bandOf = (claim: OpinionRoot['claim']) => Math.floor(gatedChallenge(claim) / CHALLENGE_BAND + 1e-9)
@@ -73,6 +77,9 @@ export const runScoringPass = async (
   const classifier = opts.classifier ?? new ClaudeClassifier(cfg.apiKey!)
   const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
   const index = new CastIndex(env.DB)
+  const archive = new Archive(env.TAKES)
+  // Where a cast may be in either: the index for recent casts, the archive for older ones.
+  const casts = new Casts(index, archive)
   const { now } = opts
   if (!(await store.acquire(LEASE, now, LEASE_TTL))) return { ...report, skipped: 'another pass holds the lease' }
 
@@ -98,6 +105,11 @@ export const runScoringPass = async (
       report.follows = follows.size
     }
 
+    /* 1b. Archive walk: node requests only, outside the Claude budget. Null once it's done. */
+    const walked = await runBackfillStep({ archive, indexDb: env.DB, nodeUrls: env.SNAPCHAIN_URL, follows, now })
+    if (walked) report.backfill = walked
+    const archiveMeta = await archive.meta()
+
     /* 2. Stage 1 */
     const freshSince = now - FRESH_HOURS * 3600
     const oldSince = now - RESURFACE_MAX_DAYS * 86_400
@@ -107,6 +119,14 @@ export const runScoringPass = async (
       { lane: 'global', casts: await index.attention({ ...gate, since: freshSince, until: now + 1 }) },
       // The 28-day scan is the expensive query; the cron runs it on a slower cadence.
       ...(opts.includeOld ? [{ lane: 'global', casts: await index.attention({ ...gate, since: oldSince, until: freshSince }) }] : []),
+      // The archive holds what's older than the index, and gets the same two lanes over that
+      // range: follows' casts inside the fresh window (which reaches back past the index's start
+      // in a deployment younger than FRESH_HOURS), and the attention gate across all of it.
+      // Read every pass: until they're classified, this is where the budget goes.
+      ...(archiveMeta ? [
+        { lane: 'following', casts: await archive.byAuthors([...follows], freshSince, MIN_TEXT_LEN, CANDIDATE_LIMIT, PROMPT_VERSION) },
+        { lane: 'global', casts: await archive.attention({ ...gate, since: oldSince, until: archiveMeta.indexStart, promptVersion: PROMPT_VERSION }) },
+      ] : []),
     ]
     const seen = new Set<string>()
     const queue: Array<{ cast: IndexedCast; lane: string }> = []
@@ -121,7 +141,7 @@ export const runScoringPass = async (
     // Only as many as the budget can classify this pass: names and quotes are fetched for these.
     const todo = queue.filter(q => !done.has(q.cast.hash)).slice(0, budget)
     const names = new Names(store, env.SNAPCHAIN_URL, now)
-    const quoted = await index.byHashes(todo.flatMap(q => (q.cast.quoted ? [q.cast.quoted.hash] : [])))
+    const quoted = await casts.byHashes(todo.flatMap(q => (q.cast.quoted ? [q.cast.quoted.hash] : [])))
     await names.ensure([...todo.map(q => q.cast), ...quoted.values()])
     await pool(todo.map(({ cast, lane }) => async () => {
       if (!spend()) return 'stop'
@@ -154,7 +174,7 @@ export const runScoringPass = async (
     const roots = (await store.opinionRoots(oldSince))
       .filter(r => r.ts >= freshSince || bandOf(r.claim) >= RESURFACE_MIN_BAND)
       .sort((a, b) => bandOf(b.claim) - bandOf(a.claim) || b.ts - a.ts)
-    const rootCasts = await index.byHashes(roots.map(r => r.hash))
+    const rootCasts = await casts.byHashes(roots.map(r => r.hash))
     const live = roots.filter(r => rootCasts.has(r.hash))
     const gone = roots.filter(r => !rootCasts.has(r.hash)).map(r => r.hash)
     /* 2c. Suggest: a reply for each side, in the cast's voice, for cards that lack one. Shares
@@ -189,7 +209,7 @@ export const runScoringPass = async (
     for (const root of live) {
       if (stop || budget <= 0) break
       const rootCast = rootCasts.get(root.hash)!
-      const thread = await index.thread(root.hash, MAX_THREAD_DEPTH, MAX_REPLIES_PER_THREAD)
+      const thread = await casts.thread(root.hash, MAX_THREAD_DEPTH, MAX_REPLIES_PER_THREAD)
       const byHash = new Map(thread.map(c => [c.hash, c]))
       const judged = new Set((stances.get(root.hash) ?? []).map(s => s.hash))
       const pending = thread.filter(r => !judged.has(r.hash))
@@ -238,6 +258,8 @@ export const runScoringPass = async (
     await store.dropScores(gone)
     report.scored = live.length
     report.dropped = gone.length + (await store.pruneStaleScores())
+    // Past the lookback nothing reads an archived cast; pruned on the slow cadence.
+    if (opts.includeOld) await archive.prune(oldSince - 86_400)
     if (stop) report.stoppedEarly = stop
     return report
   } finally {

@@ -66,3 +66,33 @@ export const readUsername = async (nodeUrls: string, fid: number): Promise<{ ok:
     return { ok: false, error: `userDataByFid: ${String(e)}` }
   }
 }
+
+const CastsPage = z.object({ messages: z.array(z.unknown()), nextPageToken: z.string().nullish() })
+
+export type CastsPageRead =
+  | { ok: true; messages: unknown[]; next: string | null }
+  | { ok: false; error: string; transient: boolean }
+
+/**
+ * One page of an author's casts, newest first (castsByFid with reverse=true). Messages come
+ * back unparsed: the caller validates each one, so one malformed message can't sink a page.
+ */
+export const readCastsPage = async (nodeUrls: string, fid: number, pageToken: string | null, pageSize: number): Promise<CastsPageRead> => {
+  const node = nodeUrls.split(',')[0]?.trim()
+  if (!node) return { ok: false, error: 'SNAPCHAIN_URL is not set', transient: false }
+  const url = new URL('/v1/castsByFid', node)
+  url.searchParams.set('fid', String(fid))
+  url.searchParams.set('pageSize', String(pageSize))
+  url.searchParams.set('reverse', 'true')
+  if (pageToken) url.searchParams.set('pageToken', pageToken)
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) return { ok: false, error: `castsByFid: ${res.status}`, transient: res.status === 429 || res.status >= 500 }
+    const parsed = CastsPage.safeParse(await res.json())
+    if (!parsed.success) return { ok: false, error: 'castsByFid: unexpected shape', transient: false }
+    // The node returns an empty token, not none, on the last page.
+    return { ok: true, messages: parsed.data.messages, next: parsed.data.nextPageToken || null }
+  } catch (e) {
+    return { ok: false, error: `castsByFid: ${String(e).slice(0, 200)}`, transient: true }
+  }
+}

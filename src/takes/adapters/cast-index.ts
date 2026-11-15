@@ -10,11 +10,11 @@ export type IndexedCast = {
 }
 export type Candidate = IndexedCast & { repliers: number; likes: number }
 
-type Row = {
+export type Row = {
   hash: string; fid: number; ts: number; text: string; parent_hash: string | null; mentions: string; embeds: string
   repliers?: number; likes?: number
 }
-const toCast = (r: Row): IndexedCast => ({
+export const toCast = (r: Row): IndexedCast => ({
   hash: r.hash, fid: r.fid, ts: r.ts, text: r.text, parentHash: r.parent_hash, mentions: parseMentions(r.mentions), ...parseEmbeds(r.embeds),
 })
 
