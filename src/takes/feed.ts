@@ -15,8 +15,8 @@ import { fillPage } from './core/page.ts'
 import { isFlipped, orient, tallyOn } from './core/market.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
-  FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
-  encodeCursor, mergeFeed, rankFeed, SUGGEST_VERSION, toLanes, type FeedCursor,
+  FRESH_HOURS, MARKET_RESURFACE_MIN_BAND, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
+  encodeCursor, mergeFeed, onePerMarket, rankFeed, SUGGEST_VERSION, toLanes, type FeedCursor,
 } from './core/score.ts'
 
 type Fetch = (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>
@@ -80,17 +80,27 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const limit = Number.isSafeInteger(asked) ? Math.min(Math.max(asked, 1), MAX_LIMIT) : DEFAULT_LIMIT
   const at = decodeCursor(url.searchParams.get('cursor'))
   if (!at) return json({ defined: true, code: 'BAD_INPUT', message: 'cursor is not one this feed issued' }, 400)
+  // filter=markets: only casts whose claim other casts also argue ("Shared questions"), older
+  // ones included whatever their band. Same ranking and lane split; its own cursor sequence.
+  const filter = url.searchParams.get('filter') ?? 'all'
+  if (filter !== 'all' && filter !== 'markets') return json({ defined: true, code: 'BAD_INPUT', message: 'filter must be all or markets' }, 400)
+  const onlyMarkets = filter === 'markets'
 
   const cfg = takesConfig(env)
   const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
   const freshSince = now - FRESH_HOURS * 3600
   const [fresh, old, follows] = await Promise.all([
-    store.scores({ since: freshSince, until: now + 1, minBand: 0, limit: FRESH_POOL }),
-    store.scores({ since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, minBand: RESURFACE_MIN_BAND, limit: OLD_POOL }),
+    store.scores({ since: freshSince, until: now + 1, minBand: 0, onlyMarkets, limit: FRESH_POOL }),
+    store.scores({
+      since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, onlyMarkets, limit: OLD_POOL,
+      ...(onlyMarkets ? { minBand: 0, marketMinBand: 0 } : { minBand: RESURFACE_MIN_BAND, marketMinBand: MARKET_RESURFACE_MIN_BAND }),
+    }),
     cfg.viewerFid === null ? Promise.resolve(new Set<number>()) : store.follows(cfg.viewerFid),
   ])
-  const freshLanes = toLanes(rankFeed(fresh, follows))
-  const oldLanes = toLanes(rankFeed(old, follows))
+  // One card per market, led by its best-ranked cast; the card shows the others.
+  const ranked = onePerMarket(rankFeed(fresh, follows), rankFeed(old, follows))
+  const freshLanes = toLanes(ranked.fresh)
+  const oldLanes = toLanes(ranked.old)
   const slots = mergeFeed(freshLanes, oldLanes, RESURFACE_EVERY, at, limit + HYDRATE_SLACK)
 
   // Hydrate more than the page needs: a cast deleted since it was scored is skipped.
@@ -129,11 +139,35 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION),
     store.marketsOf(kept.map(h => h.row.hash)),
   ])
-  /** The card's market, when it has other takes, counted on this card's own question. */
-  const marketOf = (hash: string) => {
+  // The market's other casts, shown on the card by default: loaded now, up to MARKET_INLINE
+  // per card, each answer read on the lead cast's question. One that can't be read just now is
+  // left out (the count still includes it); the rest load behind "Show more".
+  const others = new Map<string, Array<{ cast: object; answer: 'yes' | 'no' }>>()
+  await Promise.all(kept.map(async ({ row }) => {
+    const m = markets.get(row.hash)
+    if (!m) return
+    const flipped = isFlipped(m.stored, m.own)
+    const members = (await store.marketMembers(m.marketId, MARKET_INLINE + 1)).filter(x => x.hash !== row.hash).slice(0, MARKET_INLINE)
+    const loaded = await Promise.all(members.map(async x => ({ x, cast: await castOf(x.fid, x.hash) })))
+    others.set(row.hash, loaded.flatMap(l => (typeof l.cast === 'object' ? [{ cast: l.cast, answer: orient(l.x.stored, flipped) }] : [])))
+  }))
+  /**
+   * The card's market, when it has other takes, counted on this card's own question. Markets
+   * keep members whose cast was later deleted, so when every other cast was tried here (no more
+   * than MARKET_INLINE), the count is of the casts that loaded, the card's own included; a
+   * market left with no other live cast is no market on the card. (Seen live: an author deleted
+   * a cast and posted it again, leaving a "2 takes" market of one live cast.)
+   */
+  const marketOf = (hash: string, own: 'yes' | 'no') => {
     const m = markets.get(hash)
     if (!m) return null
-    return { id: m.marketId, takes: m.takes, ...tallyOn(m.storedYes, m.takes, isFlipped(m.stored, m.own)) }
+    const shown = others.get(hash) ?? []
+    if (m.takes - 1 > MARKET_INLINE) {
+      return { id: m.marketId, takes: m.takes, ...tallyOn(m.storedYes, m.takes, isFlipped(m.stored, m.own)), others: shown }
+    }
+    if (shown.length === 0) return null
+    const yes = (own === 'yes' ? 1 : 0) + shown.filter(o => o.answer === 'yes').length
+    return { id: m.marketId, takes: 1 + shown.length, yes, no: 1 + shown.length - yes, others: shown }
   }
   const items = kept
     .map(({ row, resurfaced, cast, rebuttal }) => ({
@@ -152,13 +186,15 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       band: row.band,
       following: row.following,
       resurfaced,
-      market: marketOf(row.hash),
+      market: marketOf(row.hash, row.author_stance),
     }))
   return json({ items, next: exhausted ? null : encodeCursor(next), viewerFid: cfg.viewerFid })
 }
 
-/** Members returned per expanded market line. */
+/** Members returned by the market endpoint ("Show more"). */
 const MARKET_MEMBERS = 20
+/** Other casts loaded with each market card; the rest behind "Show more". */
+const MARKET_INLINE = 3
 
 /**
  * GET /api/takes/market?id=<market id>&for=<cast hash>: the market's other takes, each with its

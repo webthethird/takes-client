@@ -11,6 +11,7 @@ export type ScoreRow = {
   hash: string; fid: number; ts: number; band: number; credit: number; both_sides: number
   yes_authors: number; no_authors: number; question: string; challenge_reason: string
   author_stance: 'yes' | 'no'; rebuttal_hash: string | null; rebuttal_fid: number | null
+  market_id: string | null
 }
 
 export class TakesStore {
@@ -210,6 +211,28 @@ export class TakesStore {
     return out
   }
 
+  /**
+   * Each cast's market as scoring sees it: the market's size, the distinct authors of its OTHER
+   * casts, and whether its casts take both sides (stored answers are all on the canonical
+   * question, so two distinct values means two sides). Casts in no market are absent.
+   */
+  async marketContexts(hashes: readonly string[]): Promise<Map<string, { id: string; takes: number; otherAuthors: number; bothSides: boolean }>> {
+    const out = new Map<string, { id: string; takes: number; otherAuthors: number; bothSides: boolean }>()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        `SELECT me.cast_hash AS hash, me.market_id,
+                (SELECT count(*) FROM market_members x WHERE x.market_id = me.market_id) AS takes,
+                (SELECT count(DISTINCT k.fid) FROM market_members x JOIN classifications k ON k.hash = x.cast_hash
+                  WHERE x.market_id = me.market_id AND k.fid != mine.fid) AS other_authors,
+                (SELECT count(DISTINCT x.answer) FROM market_members x WHERE x.market_id = me.market_id) AS sides
+           FROM market_members me JOIN classifications mine ON mine.hash = me.cast_hash
+          WHERE me.cast_hash IN (SELECT value FROM json_each(?1))`,
+      ).bind(JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string; market_id: string; takes: number; other_authors: number; sides: number }>()
+      for (const r of results) out.set(r.hash, { id: r.market_id, takes: r.takes, otherAuthors: r.other_authors, bothSides: r.sides >= 2 })
+    }
+    return out
+  }
+
   /** A market's members, oldest first: who argued it and their answer on the canonical question. */
   async marketMembers(marketId: string, limit: number): Promise<Array<{ hash: string; fid: number; stored: 'yes' | 'no'; own: 'yes' | 'no' }>> {
     const { results } = await this.db.prepare(
@@ -288,22 +311,28 @@ export class TakesStore {
     if (rows.length === 0) return
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO scores (hash, fid, ts, band, credit, both_sides, yes_authors, no_authors, question,
-         challenge_reason, author_stance, rebuttal_hash, rebuttal_fid, updated_ts)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
+         challenge_reason, author_stance, rebuttal_hash, rebuttal_fid, updated_ts, market_takes, market_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
     )
     await this.db.batch(rows.map(({ root, score: s }) => stmt.bind(
       root.hash, root.fid, root.ts, s.band, s.credit, s.bothSides ? 1 : 0, s.yesAuthors, s.noAuthors, root.claim.question,
-      root.claim.challenge_reason, root.claim.answer, s.rebuttal?.hash ?? null, s.rebuttal?.fid ?? null, now,
+      root.claim.challenge_reason, root.claim.answer, s.rebuttal?.hash ?? null, s.rebuttal?.fid ?? null, now, s.marketTakes, s.marketId,
     )))
   }
 
   /** Scores for casts in [since, until) at `minBand` or above, best band first, bounded. */
-  async scores(opts: { since: number; until: number; minBand: number; limit: number }): Promise<ScoreRow[]> {
+  /**
+   * Scored cards in [since, until) at `minBand` or above; with `marketMinBand`, also cards whose
+   * market has other takes from that band up (resurfacing; see core/score.ts resurfaces).
+   */
+  async scores(opts: { since: number; until: number; minBand: number; marketMinBand?: number; onlyMarkets?: boolean; limit: number }): Promise<ScoreRow[]> {
     const { results } = await this.db.prepare(
       `SELECT hash, fid, ts, band, credit, both_sides, yes_authors, no_authors, question, challenge_reason,
-              author_stance, rebuttal_hash, rebuttal_fid
-         FROM scores WHERE ts >= ?1 AND ts < ?2 AND band >= ?3 ORDER BY band DESC, ts DESC LIMIT ?4`,
-    ).bind(opts.since, opts.until, opts.minBand, opts.limit).all<ScoreRow>()
+              author_stance, rebuttal_hash, rebuttal_fid, market_id
+         FROM scores WHERE ts >= ?1 AND ts < ?2 AND (band >= ?3 OR (market_takes >= 2 AND band >= ?5))
+          AND (?6 = 0 OR market_takes >= 2)
+        ORDER BY band DESC, ts DESC LIMIT ?4`,
+    ).bind(opts.since, opts.until, opts.minBand, opts.limit, opts.marketMinBand ?? opts.minBand, opts.onlyMarkets ? 1 : 0).all<ScoreRow>()
     return results
   }
 

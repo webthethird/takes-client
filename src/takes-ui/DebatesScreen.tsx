@@ -31,23 +31,34 @@ const Item = z.object({
   following: z.boolean(),
   resurfaced: z.boolean(),
   /** The cast's market when it has other takes: counts are on THIS card's question. */
-  market: z.object({ id: z.string(), takes: z.number().int(), yes: z.number().int().nonnegative(), no: z.number().int().nonnegative() }).nullable(),
+  market: z.object({
+    id: z.string(), takes: z.number().int(), yes: z.number().int().nonnegative(), no: z.number().int().nonnegative(),
+    /** The market's other casts, loaded with the card (the first few), answers on this card's question. */
+    others: z.array(z.object({ cast: Cast, answer: z.enum(['yes', 'no']) })),
+  }).nullable(),
 })
 type Item = z.infer<typeof Item>
-const MarketTakes = z.object({ items: z.array(z.object({ cast: Cast, answer: z.enum(['yes', 'no']) })) })
+const MarketResponse = z.object({ items: z.array(z.object({ cast: Cast, answer: z.enum(['yes', 'no']) })) })
+type Take = z.infer<typeof MarketResponse>['items'][number]
 
-const fetchMarket = async (id: string, forHash: string): Promise<z.infer<typeof MarketTakes>> => {
+const fetchMarket = async (id: string, forHash: string): Promise<z.infer<typeof MarketResponse>> => {
   const q = new URLSearchParams({ id, for: forHash })
   const res = await fetch(`${apiUrl}/api/takes/market?${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 429) throw new Error('Busy. Try again in a minute.')
   if (!res.ok) throw new Error(`The other takes did not load (${res.status}).`)
-  return MarketTakes.parse(await res.json())
+  return MarketResponse.parse(await res.json())
 }
 const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
 
-const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> => {
-  const q = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
-  const res = await fetch(`${apiUrl}/api/takes/feed${q}`, { headers: { accept: 'application/json' } })
+type Filter = 'all' | 'markets'
+const FILTERS: Array<{ key: Filter; label: string }> = [
+  { key: 'all', label: 'All debates' },
+  { key: 'markets', label: 'Shared questions' },
+]
+
+const fetchFeed = async (filter: Filter, cursor: string | null): Promise<z.infer<typeof Feed>> => {
+  const q = new URLSearchParams({ filter, ...(cursor ? { cursor } : {}) })
+  const res = await fetch(`${apiUrl}/api/takes/feed?${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 401) throw new Error('This server is private. Sign in on the phone app to see the feed.')
   // The server ends a page early rather than skip cards it couldn't read; retrying resumes there.
   if (res.status === 429) throw new Error('The feed is busy. Try again in a minute.')
@@ -144,13 +155,13 @@ const SideButtons = ({ item }: { item: Item }) => {
   )
 }
 
-const SidePrompt = ({ item }: { item: Item }) => {
+const SidePrompt = ({ item, label }: { item: Item; label: boolean }) => {
   const c = useColors()
   const reply = useReply(item)
   const { backing } = sideCounts(item)
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>
+      {label && <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {/* Each side shows an AI reply in the cast's own voice when one exists. Until then the
             back box asks and the challenge box falls back to stage 1's challenge_reason. */}
@@ -216,41 +227,51 @@ const Says = ({ cast, stance }: { cast: Item['cast']; stance: Side }) => {
   )
 }
 
-/**
- * The card's market, when other casts argue the same question: a line that expands to them,
- * each in its side's colors, with its answer read on this card's question. They load only when
- * expanded. The line counts every take, this card's included.
- */
-const MarketLine = ({ item, market }: { item: Item; market: NonNullable<Item['market']> }) => {
-  const c = useColors()
+/** Another cast on the card's question: who said what, then the cast in its side's colors. */
+const OtherTake = ({ take }: { take: Take }) => {
   const scheme = useScheme()
-  const [open, setOpen] = useState(false)
-  const others = useQuery({
+  return (
+    <View style={{ gap: 2 }}>
+      <Says cast={take.cast} stance={take.answer} />
+      <View style={{ marginHorizontal: -16 }}>
+        <SideFrame side={take.answer}>
+          <CastCard cast={take.cast} collapse={collapseFor(take.cast.text, take.answer, scheme)} textColor={CAST_BODY[scheme][take.answer]} />
+        </SideFrame>
+      </View>
+    </View>
+  )
+}
+
+/**
+ * The market's other casts, under the card's own: one card per market, so everyone arguing the
+ * question is seen together. The first few come with the card; a market with more shows the rest
+ * on "Show more". The heading counts every take, the card's own included.
+ */
+const MarketTakes = ({ item, market }: { item: Item; market: NonNullable<Item['market']> }) => {
+  const c = useColors()
+  const [more, setMore] = useState(false)
+  const rest = useQuery({
     queryKey: ['takes', 'market', market.id, item.cast.hash],
     queryFn: () => fetchMarket(market.id, item.cast.hash),
-    enabled: open,
+    enabled: more,
     staleTime: 60_000,
   })
-  const label = `${market.takes} takes on this question · ${market.yes} Yes · ${market.no} No`
+  const shown = new Set(market.others.map(o => o.cast.hash))
+  const hidden = market.takes - 1 - market.others.length
   return (
-    <View style={{ gap: 4 }}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={label}
-        onPress={() => setOpen(o => !o)} hitSlop={6} style={{ alignSelf: 'flex-start', paddingVertical: 2 }}>
-        <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>{label} {open ? '▴' : '▾'}</Text>
-      </Pressable>
-      {open && (
-        others.isPending ? <ActivityIndicator color={c.muted} style={{ alignSelf: 'flex-start' }} />
-        : others.isError ? <Text style={{ color: c.muted, fontSize: 13 }}>{others.error.message}</Text>
-        : others.data.items.map(o => (
-          <View key={o.cast.hash} style={{ gap: 2, marginTop: 6 }}>
-            <Says cast={o.cast} stance={o.answer} />
-            <View style={{ marginHorizontal: -16 }}>
-              <SideFrame side={o.answer}>
-                <CastCard cast={o.cast} collapse={collapseFor(o.cast.text, o.answer, scheme)} textColor={CAST_BODY[scheme][o.answer]} />
-              </SideFrame>
-            </View>
-          </View>
-        ))
+    <View style={{ gap: 8 }}>
+      <Text accessibilityRole="header" style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>
+        {market.takes} takes on this question · {market.yes} Yes · {market.no} No
+      </Text>
+      {market.others.map(o => <OtherTake key={o.cast.hash} take={o} />)}
+      {more && (rest.isPending ? <ActivityIndicator color={c.muted} style={{ alignSelf: 'flex-start' }} />
+        : rest.isError ? <Text style={{ color: c.muted, fontSize: 13 }}>{rest.error.message}</Text>
+        : rest.data.items.filter(o => !shown.has(o.cast.hash)).map(o => <OtherTake key={o.cast.hash} take={o} />))}
+      {hidden > 0 && !more && (
+        <Pressable accessibilityRole="button" onPress={() => setMore(true)} hitSlop={6}
+          style={{ alignSelf: 'flex-start', borderRadius: 999, borderWidth: 1, borderColor: c.accent, paddingHorizontal: 14, paddingVertical: 6 }}>
+          <Text style={{ color: c.accent, fontSize: 14, fontWeight: '600' }}>Show {hidden} more</Text>
+        </Pressable>
       )}
     </View>
   )
@@ -267,10 +288,12 @@ const DebateCard = ({ item }: { item: Item }) => {
         </Text>
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
         <Says cast={item.cast} stance={item.authorStance} />
-        {item.market && <MarketLine item={item} market={item.market} />}
       </View>
       <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance, scheme)} textColor={CAST_BODY[scheme][item.authorStance]} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>
+        {/* Directly under the cast: the market's other casts, always shown. Their heading
+            stands in for the "Open debate" label, which a card in a market doesn't need. */}
+        {item.market && <MarketTakes item={item} market={item.market} />}
         {item.rebuttal ? (
           <>
             <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>Someone already disagrees</Text>
@@ -279,7 +302,7 @@ const DebateCard = ({ item }: { item: Item }) => {
             </View>
           </>
         ) : (
-          <SidePrompt item={item} />
+          <SidePrompt item={item} label={!item.market} />
         )}
         {/* A real rebuttal replaces the AI examples, but the card still invites both sides. */}
         {item.rebuttal && <SideButtons item={item} />}
@@ -300,11 +323,30 @@ const Footer = ({ loading, error, retry }: { loading: boolean; error: Error | nu
   )
 }
 
+/** Chips above the feed: which cards it shows. Topic tabs will join this row. */
+const FilterBar = ({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) => {
+  const c = useColors()
+  return (
+    <View accessibilityRole="tablist" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}>
+      {FILTERS.map(f => {
+        const on = f.key === value
+        return (
+          <Pressable key={f.key} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(f.key)}
+            style={{ borderRadius: 999, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? c.accent : 'transparent', paddingHorizontal: 14, paddingVertical: 6 }}>
+            <Text style={{ color: on ? c.accentText : c.text, fontSize: 14, fontWeight: '600' }}>{f.label}</Text>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
 export const DebatesScreen = () => {
   const c = useColors()
+  const [filter, setFilter] = useState<Filter>('all')
   const feed = useInfiniteQuery({
-    queryKey: ['takes', 'feed'],
-    queryFn: ({ pageParam }) => fetchFeed(pageParam),
+    queryKey: ['takes', 'feed', filter],
+    queryFn: ({ pageParam }) => fetchFeed(filter, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: last => last.next,
     staleTime: 30_000,
@@ -315,8 +357,9 @@ export const DebatesScreen = () => {
     const seen = new Set<string>()
     return (feed.data?.pages ?? []).flatMap(p => p.items).filter(i => !seen.has(i.cast.hash) && (seen.add(i.cast.hash), true))
   }, [feed.data])
-  if (feed.isPending) return <Loading />
-  if (feed.isError && items.length === 0) return <Message tone="danger">{feed.error.message}</Message>
+  const bar = <FilterBar value={filter} onChange={setFilter} />
+  if (feed.isPending) return <View style={{ flex: 1 }}>{bar}<Loading /></View>
+  if (feed.isError && items.length === 0) return <View style={{ flex: 1 }}>{bar}<Message tone="danger">{feed.error.message}</Message></View>
   const more = () => { if (feed.hasNextPage && !feed.isFetchingNextPage && !feed.isFetchNextPageError) void feed.fetchNextPage() }
   return (
     <FlatList
@@ -335,9 +378,10 @@ export const DebatesScreen = () => {
       refreshControl={
         <RefreshControl refreshing={feed.isRefetching && !feed.isFetchingNextPage} onRefresh={() => void feed.refetch()} tintColor={c.muted} />
       }
-      ListEmptyComponent={
-        <Message>Nothing debatable yet. Takes classifies new casts every minute; check back shortly.</Message>
-      }
+      ListHeaderComponent={bar}
+      ListEmptyComponent={filter === 'markets'
+        ? <Message>No shared questions yet: a question shows here once two casts argue it.</Message>
+        : <Message>Nothing debatable yet. Takes classifies new casts every minute; check back shortly.</Message>}
     />
   )
 }

@@ -38,6 +38,17 @@ export const FRESH_HOURS = 168
  */
 export const RESURFACE_MAX_DAYS = 28
 export const RESURFACE_MIN_BAND = 7
+/**
+ * An older cast whose claim other casts also argue (its market has more than one take)
+ * resurfaces from this band: several people independently arguing one claim across threads is
+ * itself evidence the question is unsettled. First guess, Nov 15, 2026: 16 of 25 casts in
+ * multi-cast markets were older than a week and only 1 reached band 7.
+ */
+export const MARKET_RESURFACE_MIN_BAND = 5
+
+/** Whether an older cast comes back into the feed. */
+export const resurfaces = (band: number, marketTakes: number): boolean =>
+  band >= RESURFACE_MIN_BAND || (marketTakes >= 2 && band >= MARKET_RESURFACE_MIN_BAND)
 export const RESURFACE_EVERY = 4
 /** Global lane: casts this many distinct people (not the author) replied to. */
 export const MIN_REPLIERS = 3
@@ -63,6 +74,14 @@ export const PER_AUTHOR_CREDIT = 0.12
 export const MAX_AUTHOR_CREDIT = 0.4
 /** Confidence gates rather than boosts: a shaky extraction drops a band. */
 export const CONFIDENCE_FLOOR = 0.5
+/**
+ * Other casts arguing the same claim (the card's market). A separate cast is a deliberate take,
+ * so each other author is worth a little more than a replier. First guesses, to tune by eye.
+ */
+export const MARKET_TAKE_CREDIT = 0.15
+export const MAX_MARKET_TAKE_CREDIT = 0.45
+/** The market's casts take both sides: the same weight as a two-sided reply thread. */
+export const MARKET_BOTH_SIDES_CREDIT = 0.5
 /** Total within-band credit stays below one band, so it can never cross into the next. */
 export const MAX_CREDIT = 0.99
 
@@ -132,9 +151,16 @@ export type ReplyStance = {
   textLen: number
 }
 
+/** The card's market, seen from it: distinct authors of the OTHER casts, and whether the market's casts take both sides. */
+export type MarketContext = { id: string | null; otherAuthors: number; bothSides: boolean; takes: number }
+export const NO_MARKET: MarketContext = { id: null, otherAuthors: 0, bothSides: false, takes: 1 }
+
 export type CardScore = {
   band: number
   credit: number
+  marketTakes: number
+  /** Set only when the market has other casts: the feed shows one card per market. */
+  marketId: string | null
   bothSides: boolean
   yesAuthors: number
   noAuthors: number
@@ -145,7 +171,7 @@ export type CardScore = {
  * Scores one root cast and its thread. The root author is a member on their own answer;
  * replies count only with a stance (off_topic is most of a real thread, and is not a side).
  */
-export const scoreCard = (root: { fid: number }, claim: Claim, replies: readonly ReplyStance[]): CardScore => {
+export const scoreCard = (root: { fid: number }, claim: Claim, replies: readonly ReplyStance[], market: MarketContext = NO_MARKET): CardScore => {
   const yes = new Set<number>()
   const no = new Set<number>()
   ;(claim.answer === 'yes' ? yes : no).add(root.fid)
@@ -163,8 +189,12 @@ export const scoreCard = (root: { fid: number }, claim: Claim, replies: readonly
   const people = new Set([...yes, ...no]).size
   const band = Math.floor(gatedChallenge(claim) / CHALLENGE_BAND + 1e-9)
   const credit = Math.min(MAX_CREDIT,
-    (bothSides ? BOTH_SIDES_CREDIT : 0) + Math.min(PER_AUTHOR_CREDIT * (people - 1), MAX_AUTHOR_CREDIT))
-  return { band, credit, bothSides, yesAuthors: yes.size, noAuthors: no.size, rebuttal: pickRebuttal(root.fid, claim.answer, replies) }
+    (bothSides ? BOTH_SIDES_CREDIT : 0) + Math.min(PER_AUTHOR_CREDIT * (people - 1), MAX_AUTHOR_CREDIT)
+    + Math.min(MARKET_TAKE_CREDIT * market.otherAuthors, MAX_MARKET_TAKE_CREDIT) + (market.bothSides ? MARKET_BOTH_SIDES_CREDIT : 0))
+  return {
+    band, credit, marketTakes: market.takes, marketId: market.takes >= 2 ? market.id : null, bothSides, yesAuthors: yes.size, noAuthors: no.size,
+    rebuttal: pickRebuttal(root.fid, claim.answer, replies),
+  }
 }
 
 /**
@@ -200,6 +230,25 @@ export const rankFeed = <T extends { fid: number; band: number; credit: number; 
   rows
     .map(r => ({ ...r, following: follows.has(r.fid), key: r.band + Math.min(MAX_CREDIT, r.credit) }))
     .sort((a, b) => b.key - a.key || b.ts - a.ts || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
+
+/**
+ * One card per market: of the casts that share a market, only the best-ranked one is kept,
+ * across the fresh and resurfaced lists together (a market can have casts in both). Its card
+ * shows the others. Casts alone in their market (market_id null) are all kept. Order is kept.
+ */
+export const onePerMarket = <T extends { hash: string; key: number; ts: number; market_id: string | null }>(
+  fresh: readonly T[], old: readonly T[],
+): { fresh: T[]; old: T[] } => {
+  const best = new Map<string, T>()
+  const better = (a: T, b: T) => a.key - b.key || a.ts - b.ts || (a.hash < b.hash ? 1 : -1)
+  for (const r of [...fresh, ...old]) {
+    if (r.market_id === null) continue
+    const cur = best.get(r.market_id)
+    if (!cur || better(r, cur) > 0) best.set(r.market_id, r)
+  }
+  const keep = (r: T) => r.market_id === null || best.get(r.market_id) === r
+  return { fresh: fresh.filter(keep), old: old.filter(keep) }
+}
 
 /** A ranked list split by whether the viewer follows the author, each half still in rank order. */
 export type Lanes<T> = { following: readonly T[]; others: readonly T[] }

@@ -193,3 +193,59 @@ describe('rankFeed: debatability alone orders cards', () => {
   })
   it('band arithmetic matches CHALLENGE_BAND', () => expect(CHALLENGE_BAND).toBe(0.1))
 })
+
+import { MARKET_BOTH_SIDES_CREDIT, MARKET_RESURFACE_MIN_BAND, MARKET_TAKE_CREDIT, MAX_MARKET_TAKE_CREDIT, RESURFACE_MIN_BAND, resurfaces } from './score.ts'
+
+describe('scoreCard: other casts arguing the same claim', () => {
+  const alone = scoreCard({ fid: 1 }, claim(), [])
+  it('credits each other author, capped, without changing the band', () => {
+    const one = scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 1, bothSides: false, takes: 2 })
+    expect(one.credit - alone.credit).toBeCloseTo(MARKET_TAKE_CREDIT)
+    expect(one.band).toBe(alone.band)
+    expect(one.marketTakes).toBe(2)
+    const many = scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 20, bothSides: false, takes: 21 })
+    expect(many.credit - alone.credit).toBeCloseTo(MAX_MARKET_TAKE_CREDIT)
+  })
+  it('credits a market whose casts take both sides, and never crosses into the next band', () => {
+    const two = scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 1, bothSides: true, takes: 2 })
+    expect(two.credit - alone.credit).toBeCloseTo(MARKET_TAKE_CREDIT + MARKET_BOTH_SIDES_CREDIT)
+    const maxed = scoreCard({ fid: 1 }, claim(), [reply(2, 'no'), reply(3, 'no'), reply(4, 'yes'), reply(5, 'no')],
+      { id: '0xm', otherAuthors: 9, bothSides: true, takes: 10 })
+    expect(maxed.credit).toBeLessThan(1)
+  })
+  it('a cast alone in its market scores as before', () => {
+    expect(scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 0, bothSides: false, takes: 1 })).toEqual(alone)
+  })
+})
+
+describe('resurfaces: older casts that come back', () => {
+  it('alone, only from RESURFACE_MIN_BAND', () => {
+    expect(resurfaces(RESURFACE_MIN_BAND, 1)).toBe(true)
+    expect(resurfaces(RESURFACE_MIN_BAND - 1, 1)).toBe(false)
+  })
+  it('argued in other casts too, from MARKET_RESURFACE_MIN_BAND', () => {
+    expect(resurfaces(MARKET_RESURFACE_MIN_BAND, 2)).toBe(true)
+    expect(resurfaces(MARKET_RESURFACE_MIN_BAND - 1, 5)).toBe(false)
+  })
+})
+
+import { onePerMarket } from './score.ts'
+
+describe('onePerMarket: a market\'s casts share one card', () => {
+  const r = (hash: string, key: number, market_id: string | null, ts = 100) => ({ hash, key, ts, market_id })
+  it('keeps only the best-ranked cast of each market, across fresh and resurfaced, in order', () => {
+    const fresh = [r('a', 7.2, 'm1'), r('b', 6.5, null), r('c', 4.1, 'm1'), r('d', 3.0, 'm2')]
+    const old = [r('e', 8.0, 'm2'), r('f', 5.0, null)]
+    const kept = onePerMarket(fresh, old)
+    expect(kept.fresh.map(x => x.hash)).toEqual(['a', 'b'])   // c loses to a; d loses to e
+    expect(kept.old.map(x => x.hash)).toEqual(['e', 'f'])
+  })
+  it('breaks ties by recency, then hash, so pages stay stable', () => {
+    expect(onePerMarket([r('a', 5, 'm', 100), r('b', 5, 'm', 200)], []).fresh.map(x => x.hash)).toEqual(['b'])
+    expect(onePerMarket([r('b', 5, 'm'), r('a', 5, 'm')], []).fresh.map(x => x.hash)).toEqual(['a'])
+  })
+  it('a scored cast shows its market id only when the market has other casts', () => {
+    expect(scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 1, bothSides: false, takes: 2 }).marketId).toBe('0xm')
+    expect(scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 0, bothSides: false, takes: 1 }).marketId).toBeNull()
+  })
+})

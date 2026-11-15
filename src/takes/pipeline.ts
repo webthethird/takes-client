@@ -21,7 +21,7 @@ import { Names } from './names.ts'
 import { runMerge, type MergeReport } from './merge.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
-  PROMPT_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge,
+  NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces,
   reconcileStance, scoreCard,
 } from './core/score.ts'
 
@@ -185,8 +185,12 @@ export const runScoringPass = async (
     if (!stop) report.merge = await runMerge({ store, classifier, openaiKey: cfg.openaiKey, since: oldSince, now, spend, fail })
 
     /* 3. Stage 2: fresh roots, and older ones good enough to resurface. Best band first. */
-    const roots = (await store.opinionRoots(oldSince))
-      .filter(r => r.ts >= freshSince || bandOf(r.claim) >= RESURFACE_MIN_BAND)
+    const opinions = await store.opinionRoots(oldSince)
+    const markets = await store.marketContexts(opinions.map(r => r.hash))
+    // Scored: fresh casts, older ones that resurface in the main feed, and every cast in a
+    // multi-cast market, whatever its band, so the "Shared questions" filter shows them all.
+    const roots = opinions
+      .filter(r => r.ts >= freshSince || resurfaces(bandOf(r.claim), markets.get(r.hash)?.takes ?? 1) || (markets.get(r.hash)?.takes ?? 1) >= 2)
       .sort((a, b) => bandOf(b.claim) - bandOf(a.claim) || b.ts - a.ts)
     const rootCasts = await casts.byHashes(roots.map(r => r.hash))
     const live = roots.filter(r => rootCasts.has(r.hash))
@@ -268,7 +272,9 @@ export const runScoringPass = async (
 
     /* 4. Rescore everything live; drop cards whose cast is gone. */
     stances = await store.stances(live.map(r => r.hash))
-    await store.putScores(live.map(root => ({ root, score: scoreCard(root, root.claim, stances.get(root.hash) ?? []) })), now)
+    await store.putScores(live.map(root => ({
+      root, score: scoreCard(root, root.claim, stances.get(root.hash) ?? [], markets.get(root.hash) ?? NO_MARKET),
+    })), now)
     await store.dropScores(gone)
     report.scored = live.length
     report.dropped = gone.length + (await store.pruneStaleScores())
