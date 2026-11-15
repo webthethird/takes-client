@@ -48,12 +48,11 @@ const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> =
 const laneLabel = (i: Item) =>
   i.resurfaced ? 'Resurfaced · still unsettled' : i.following ? 'From someone you follow' : 'Across Farcaster'
 
-/** People, not casts: these count distinct authors whose replies took a side. */
-const sides = (i: Item) => {
-  const backing = i.authorStance === 'yes' ? i.yesAuthors : i.noAuthors
-  const challenging = i.authorStance === 'yes' ? i.noAuthors : i.yesAuthors
-  return `${backing} backing · ${challenging} challenging`
-}
+/** People, not casts: distinct authors whose replies took each side, relative to the cast. */
+const sideCounts = (i: Item) => ({
+  backing: i.authorStance === 'yes' ? i.yesAuthors : i.noAuthors,
+  challenging: i.authorStance === 'yes' ? i.noAuthors : i.yesAuthors,
+})
 
 /**
  * One side's reply box. A pressable, not a text field: it opens the stock composer as a reply
@@ -89,13 +88,51 @@ const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
  * side in the cast's own voice; until it has, the back box asks and the challenge box shows
  * stage 1's challenge_reason.
  */
-const SidePrompt = ({ item }: { item: Item }) => {
-  const c = useColors()
+/** Opens the composer as a reply to the card's cast: both sides argue with the cast itself. */
+const useReply = (item: Item) => {
   const router = useRouter()
-  const backing = item.authorStance === 'yes' ? item.yesAuthors : item.noAuthors
   // router.push rather than <Link asChild>: Warpstack's ui notes a style array under asChild
   // reaches the DOM on the web and crashes the page.
-  const reply = () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
+  return () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
+}
+
+/**
+ * A compact side button, for cards that already show a real rebuttal: the same invitation as
+ * the side boxes, in the side's colors, without the AI example text.
+ */
+const SideButton = ({ side, title, count, onPress }: { side: Side; title: string; count: number; onPress: () => void }) => {
+  const c = SIDE_PALETTES[side]
+  const people = `${count} ${count === 1 ? 'person' : 'people'}`
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. ${people} so far`}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: 'row', alignItems: 'center', gap: 6, borderColor: SIDE_PALETTES.no.border, borderWidth: 1, borderRadius: 999,
+        backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 14, paddingVertical: 7,
+      })}>
+      <Text style={{ color: c.text, fontSize: 14, fontWeight: '600' }}>{title}</Text>
+      <Text style={{ color: c.muted, fontSize: 13 }}>· {count}</Text>
+    </Pressable>
+  )
+}
+
+const SideButtons = ({ item }: { item: Item }) => {
+  const reply = useReply(item)
+  const { backing, challenging } = sideCounts(item)
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      <SideButton side={item.authorStance} title="Back this take" count={backing} onPress={reply} />
+      <SideButton side={opposite(item.authorStance)} title="Challenge it" count={challenging} onPress={reply} />
+    </View>
+  )
+}
+
+const SidePrompt = ({ item }: { item: Item }) => {
+  const c = useColors()
+  const reply = useReply(item)
+  const { backing } = sideCounts(item)
   return (
     <View style={{ gap: 8 }}>
       <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>
@@ -184,8 +221,8 @@ const DebateCard = ({ item }: { item: Item }) => {
         ) : (
           <SidePrompt item={item} />
         )}
-        {/* The side boxes carry their own counts. */}
-        {item.rebuttal && <Text style={{ color: c.muted, fontSize: 13 }}>{sides(item)}</Text>}
+        {/* A real rebuttal replaces the AI examples, but the card still invites both sides. */}
+        {item.rebuttal && <SideButtons item={item} />}
       </View>
     </View>
   )
