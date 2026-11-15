@@ -105,3 +105,22 @@ export const decodeEmbedding = (blob: ArrayBuffer | ArrayLike<number>): Float32A
 }
 
 export const encodeEmbedding = (v: Float32Array): ArrayBuffer => v.slice().buffer
+
+/* Showing a market from one member's side */
+
+export type Answer = 'yes' | 'no'
+
+/**
+ * Members store their answer on the CANONICAL question. A card shows its own cast's question,
+ * which is the canonical one turned around when that cast joined reversed ("Is X good?" under
+ * "Is removing X good?"). `flipped`: the viewing cast's own answer differs from its stored one.
+ */
+export const isFlipped = (stored: Answer, own: Answer): boolean => stored !== own
+
+/** Another member's answer, read on the viewing cast's question. */
+export const orient = (stored: Answer, viewerFlipped: boolean): Answer =>
+  viewerFlipped ? (stored === 'yes' ? 'no' : 'yes') : stored
+
+/** A market's takes, counted on the viewing cast's question. */
+export const tallyOn = (storedYes: number, takes: number, viewerFlipped: boolean): { yes: number; no: number } =>
+  viewerFlipped ? { yes: takes - storedYes, no: storedYes } : { yes: storedYes, no: takes - storedYes }

@@ -1,10 +1,11 @@
 // Warpstack's Worker, wrapped. Every request and cron goes to Warpstack unchanged, except
-// the Takes routes, and the minute cron also runs a Takes scoring pass after Warpstack's own
-// watchdog. Warpstack is used from npm as published; nothing of it is forked.
+// the Takes routes (/api/takes/feed and /api/takes/market), and the minute cron also runs a
+// Takes scoring pass after Warpstack's own watchdog. Warpstack is used from npm as published;
+// nothing of it is forked.
 
 import warp, { IngestionObject, UserObject } from '@warpstack/api/worker'
 import type { Env } from './takes/config.ts'
-import { takesFeed } from './takes/feed.ts'
+import { takesFeed, takesMarket } from './takes/feed.ts'
 import { runScoringPass } from './takes/pipeline.ts'
 
 export { IngestionObject, UserObject }
@@ -17,7 +18,9 @@ const nowSeconds = (ms: number) => Math.floor(ms / 1000)
 
 export default {
   fetch(req, env, ctx) {
-    if (new URL(req.url).pathname === '/api/takes/feed') return takesFeed(req, env, ctx, warp.fetch, nowSeconds(Date.now()))
+    const path = new URL(req.url).pathname
+    if (path === '/api/takes/feed') return takesFeed(req, env, ctx, warp.fetch, nowSeconds(Date.now()))
+    if (path === '/api/takes/market') return takesMarket(req, env, ctx, warp.fetch)
     return warp.fetch(req, env, ctx)
   },
 

@@ -189,6 +189,37 @@ export class TakesStore {
     ).bind(m.castHash, m.marketId, m.mergeVersion, m.answer, m.via, m.similarity, m.detail === undefined ? null : JSON.stringify(m.detail), m.now, m.embedding).run()
   }
 
+  /**
+   * Each cast's market, for the feed: its id, the cast's answer as stored (on the canonical
+   * question) and as the cast itself gave it (on its own question), and the market's size and
+   * stored YES count. Casts in no market, or alone in theirs, are absent.
+   */
+  async marketsOf(hashes: readonly string[]): Promise<Map<string, { marketId: string; stored: 'yes' | 'no'; own: 'yes' | 'no'; takes: number; storedYes: number }>> {
+    const out = new Map<string, { marketId: string; stored: 'yes' | 'no'; own: 'yes' | 'no'; takes: number; storedYes: number }>()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        `SELECT mm.cast_hash, mm.market_id, mm.answer AS stored, json_extract(k.claim, '$.answer') AS own, t.takes, t.yes
+           FROM market_members mm
+           JOIN classifications k ON k.hash = mm.cast_hash
+           JOIN (SELECT market_id, count(*) AS takes, sum(answer = 'yes') AS yes FROM market_members GROUP BY market_id) t
+             ON t.market_id = mm.market_id
+          WHERE mm.cast_hash IN (SELECT value FROM json_each(?1)) AND t.takes >= 2`,
+      ).bind(JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ cast_hash: string; market_id: string; stored: 'yes' | 'no'; own: 'yes' | 'no'; takes: number; yes: number }>()
+      for (const r of results) out.set(r.cast_hash, { marketId: r.market_id, stored: r.stored, own: r.own, takes: r.takes, storedYes: r.yes })
+    }
+    return out
+  }
+
+  /** A market's members, oldest first: who argued it and their answer on the canonical question. */
+  async marketMembers(marketId: string, limit: number): Promise<Array<{ hash: string; fid: number; stored: 'yes' | 'no'; own: 'yes' | 'no' }>> {
+    const { results } = await this.db.prepare(
+      `SELECT mm.cast_hash AS hash, k.fid, mm.answer AS stored, json_extract(k.claim, '$.answer') AS own
+         FROM market_members mm JOIN classifications k ON k.hash = mm.cast_hash
+        WHERE mm.market_id = ?1 ORDER BY k.ts LIMIT ?2`,
+    ).bind(marketId, limit).all<{ hash: string; fid: number; stored: 'yes' | 'no'; own: 'yes' | 'no' }>()
+    return results
+  }
+
   /* Suggest: one reply per side, in the cast's voice */
 
   /** Which of these roots already have suggestions under `version`. */

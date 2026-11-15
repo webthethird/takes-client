@@ -12,6 +12,7 @@
 import { TakesStore } from './adapters/store.ts'
 import { matchCasing } from './core/text.ts'
 import { fillPage } from './core/page.ts'
+import { isFlipped, orient, tallyOn } from './core/market.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
   FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
@@ -34,6 +35,36 @@ const HYDRATE_SLACK = 10
 
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } })
+
+/**
+ * Loads casts through Warpstack's own `cast.get`, in-process, as the viewer: their session and
+ * IP go with each request, so Warpstack's access rules and rate limits apply as they would to
+ * the app. Each result is the cast as Warpstack serves it; 'gone' when it no longer exists
+ * (404, or not live); 'unavailable' when it couldn't be read just now: a rate limit (429), a
+ * node failure (5xx), or an exception. Only 'gone' may be skipped for good (fillPage).
+ */
+const castLoader = (req: Request, env: Env, ctx: ExecutionContext, warp: Fetch) => {
+  const origin = new URL(req.url).origin
+  const headers = new Headers({ accept: 'application/json' })
+  const auth = req.headers.get('authorization')
+  if (auth) headers.set('authorization', auth)
+  const ip = req.headers.get('cf-connecting-ip')
+  if (ip) headers.set('cf-connecting-ip', ip)
+  return async (fid: number, hash: string): Promise<object | 'gone' | 'unavailable' | 'unauthorized'> => {
+    let res: Response
+    try {
+      res = await warp(new Request(new URL(`/api/casts/${fid}/${hash}`, origin), { headers }), env, ctx)
+    } catch {
+      return 'unavailable'
+    }
+    if (res.status === 401) return 'unauthorized'
+    if (res.status === 429 || res.status >= 500) return 'unavailable'
+    if (!res.ok) return 'gone'
+    const body = (await res.json()) as { cast?: { state?: string; cast?: unknown } }
+    const cast = body.cast?.state === 'live' ? body.cast.cast : undefined
+    return typeof cast === 'object' && cast !== null ? cast : 'gone'
+  }
+}
 
 /** Mirrors Warpstack's front door: a private deployment answers nothing without a session. */
 const unauthorized = () =>
@@ -63,29 +94,7 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const slots = mergeFeed(freshLanes, oldLanes, RESURFACE_EVERY, at, limit + HYDRATE_SLACK)
 
   // Hydrate more than the page needs: a cast deleted since it was scored is skipped.
-  const headers = new Headers({ accept: 'application/json' })
-  if (auth) headers.set('authorization', auth)
-  const ip = req.headers.get('cf-connecting-ip')
-  if (ip) headers.set('cf-connecting-ip', ip)
-  /**
-   * The cast as Warpstack serves it; 'gone' when it no longer exists (404, or not live);
-   * 'unavailable' when it couldn't be read just now: a rate limit (429), a node failure (5xx),
-   * or an exception. Only 'gone' may be skipped for good (fillPage).
-   */
-  const castOf = async (fid: number, hash: string): Promise<object | 'gone' | 'unavailable' | 'unauthorized'> => {
-    let res: Response
-    try {
-      res = await warp(new Request(new URL(`/api/casts/${fid}/${hash}`, url.origin), { headers }), env, ctx)
-    } catch {
-      return 'unavailable'
-    }
-    if (res.status === 401) return 'unauthorized'
-    if (res.status === 429 || res.status >= 500) return 'unavailable'
-    if (!res.ok) return 'gone'
-    const body = (await res.json()) as { cast?: { state?: string; cast?: unknown } }
-    const cast = body.cast?.state === 'live' ? body.cast.cast : undefined
-    return typeof cast === 'object' && cast !== null ? cast : 'gone'
-  }
+  const castOf = castLoader(req, env, ctx, warp)
 
   const hydrated = await Promise.all(slots.map(async ({ item: row, resurfaced, after }) => {
     const [cast, rebuttal] = await Promise.all([
@@ -116,7 +125,16 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     const text = (cast as { text?: unknown }).text
     return typeof text === 'string' ? matchCasing(text, s) : s
   }
-  const suggestions = await store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION)
+  const [suggestions, markets] = await Promise.all([
+    store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION),
+    store.marketsOf(kept.map(h => h.row.hash)),
+  ])
+  /** The card's market, when it has other takes, counted on this card's own question. */
+  const marketOf = (hash: string) => {
+    const m = markets.get(hash)
+    if (!m) return null
+    return { id: m.marketId, takes: m.takes, ...tallyOn(m.storedYes, m.takes, isFlipped(m.stored, m.own)) }
+  }
   const items = kept
     .map(({ row, resurfaced, cast, rebuttal }) => ({
       cast,
@@ -134,6 +152,40 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       band: row.band,
       following: row.following,
       resurfaced,
+      market: marketOf(row.hash),
     }))
   return json({ items, next: exhausted ? null : encodeCursor(next), viewerFid: cfg.viewerFid })
+}
+
+/** Members returned per expanded market line. */
+const MARKET_MEMBERS = 20
+
+/**
+ * GET /api/takes/market?id=<market id>&for=<cast hash>: the market's other takes, each with its
+ * answer read on the question of the card asking (`for`), oldest first. Loaded only when a
+ * card's market line is expanded, so the feed itself makes no extra cast lookups.
+ */
+export const takesMarket = async (req: Request, env: Env, ctx: ExecutionContext, warp: Fetch): Promise<Response> => {
+  if (req.method !== 'GET') return json({ defined: true, code: 'NOT_FOUND', message: 'Not found' }, 404)
+  if (env.ACCESS !== 'public' && !req.headers.get('authorization')?.startsWith('Bearer ')) return unauthorized()
+  const url = new URL(req.url)
+  const id = url.searchParams.get('id') ?? ''
+  const forHash = url.searchParams.get('for') ?? ''
+  if (!/^0x[0-9a-f]{64}$/.test(id) || !/^0x[0-9a-f]{40}$/.test(forHash)) {
+    return json({ defined: true, code: 'BAD_INPUT', message: 'id must be a market id and for a cast hash' }, 400)
+  }
+  const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
+  const members = await store.marketMembers(id, MARKET_MEMBERS + 1)
+  const viewer = members.find(m => m.hash === forHash)
+  if (!viewer) return json({ defined: true, code: 'NOT_FOUND', message: 'that cast is not in this market' }, 404)
+  const flipped = isFlipped(viewer.stored, viewer.own)
+  const castOf = castLoader(req, env, ctx, warp)
+  const others = members.filter(m => m.hash !== forHash).slice(0, MARKET_MEMBERS)
+  const loaded = await Promise.all(others.map(async m => ({ m, cast: await castOf(m.fid, m.hash) })))
+  if (loaded.some(l => l.cast === 'unauthorized')) return unauthorized()
+  if (loaded.some(l => l.cast === 'unavailable')) {
+    return json({ defined: true, code: 'RATE_LIMITED', message: 'Busy; try again in a minute', data: { retryAfter: 60 } }, 429)
+  }
+  const items = loaded.filter(l => typeof l.cast === 'object').map(l => ({ cast: l.cast, answer: orient(l.m.stored, flipped) }))
+  return json({ items })
 }

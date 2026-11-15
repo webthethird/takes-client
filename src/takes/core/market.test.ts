@@ -98,3 +98,22 @@ describe('embeddings', () => {
     expect(() => decodeEmbedding(new Uint8Array(5).buffer)).toThrow()
   })
 })
+
+import { isFlipped, orient, tallyOn } from './market.ts'
+
+describe('a market seen from one member', () => {
+  // Canonical: "Is disabling reply bumping a good idea?". A member argued "Is reply bumping a
+  // good feature? -> no", stored as "yes" on the canonical question: flipped.
+  it('detects a member that joined reversed', () => {
+    expect(isFlipped('yes', 'no')).toBe(true)
+    expect(isFlipped('no', 'no')).toBe(false)
+  })
+  it('reads other members on the viewer\'s own question', () => {
+    expect(orient('no', true)).toBe('yes')   // a "no, don't disable it" is a "yes, it's a good feature"
+    expect(orient('no', false)).toBe('no')
+  })
+  it('counts takes on the viewer\'s question', () => {
+    expect(tallyOn(2, 3, false)).toEqual({ yes: 2, no: 1 })
+    expect(tallyOn(2, 3, true)).toEqual({ yes: 1, no: 2 })
+  })
+})

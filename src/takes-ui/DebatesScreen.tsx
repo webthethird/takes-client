@@ -3,12 +3,12 @@
 // A real rebuttal from someone else is shown as evidence; only when there is none does the
 // card fall back to the classifier's challenge_reason, labelled as an AI hypothesis.
 
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { routes } from '@warpstack/app-core'
 import { Cast } from '@warpstack/contract'
 import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useColorScheme, View } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
@@ -30,8 +30,19 @@ const Item = z.object({
   band: z.number().int(),
   following: z.boolean(),
   resurfaced: z.boolean(),
+  /** The cast's market when it has other takes: counts are on THIS card's question. */
+  market: z.object({ id: z.string(), takes: z.number().int(), yes: z.number().int().nonnegative(), no: z.number().int().nonnegative() }).nullable(),
 })
 type Item = z.infer<typeof Item>
+const MarketTakes = z.object({ items: z.array(z.object({ cast: Cast, answer: z.enum(['yes', 'no']) })) })
+
+const fetchMarket = async (id: string, forHash: string): Promise<z.infer<typeof MarketTakes>> => {
+  const q = new URLSearchParams({ id, for: forHash })
+  const res = await fetch(`${apiUrl}/api/takes/market?${q}`, { headers: { accept: 'application/json' } })
+  if (res.status === 429) throw new Error('Busy. Try again in a minute.')
+  if (!res.ok) throw new Error(`The other takes did not load (${res.status}).`)
+  return MarketTakes.parse(await res.json())
+}
 const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
 
 const fetchFeed = async (cursor: string | null): Promise<z.infer<typeof Feed>> => {
@@ -184,16 +195,16 @@ const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => {
 
 const authorName = (cast: Item['cast']) => cast.author.displayName || cast.author.username || `fid:${cast.fid}`
 
-/** "<author> says Yes": which answer to the question the cast argues, as a chip in that side's colors. */
-const AuthorSide = ({ item }: { item: Item }) => {
+/** "<author> says Yes": which answer to the card's question a cast argues, as a chip in that side's colors. */
+const Says = ({ cast, stance }: { cast: Item['cast']; stance: Side }) => {
   const c = useColors()
-  const side = useSidePalette(item.authorStance)
-  const answer = item.authorStance === 'yes' ? 'Yes' : 'No'
+  const side = useSidePalette(stance)
+  const answer = stance === 'yes' ? 'Yes' : 'No'
   return (
-    <View accessible accessibilityLabel={`${authorName(item.cast)} says ${answer}`}
+    <View accessible accessibilityLabel={`${authorName(cast)} says ${answer}`}
       style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
       <Text style={{ color: c.muted, fontSize: 14 }}>
-        <Text style={{ color: c.text, fontWeight: '600' }}>{authorName(item.cast)}</Text> says
+        <Text style={{ color: c.text, fontWeight: '600' }}>{authorName(cast)}</Text> says
       </Text>
       <View style={{
         backgroundColor: side.bg, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 999,
@@ -201,6 +212,46 @@ const AuthorSide = ({ item }: { item: Item }) => {
       }}>
         <Text style={{ color: side.text, fontSize: 13, fontWeight: '700' }}>{answer}</Text>
       </View>
+    </View>
+  )
+}
+
+/**
+ * The card's market, when other casts argue the same question: a line that expands to them,
+ * each in its side's colors, with its answer read on this card's question. They load only when
+ * expanded. The line counts every take, this card's included.
+ */
+const MarketLine = ({ item, market }: { item: Item; market: NonNullable<Item['market']> }) => {
+  const c = useColors()
+  const scheme = useScheme()
+  const [open, setOpen] = useState(false)
+  const others = useQuery({
+    queryKey: ['takes', 'market', market.id, item.cast.hash],
+    queryFn: () => fetchMarket(market.id, item.cast.hash),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const label = `${market.takes} takes on this question · ${market.yes} Yes · ${market.no} No`
+  return (
+    <View style={{ gap: 4 }}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={label}
+        onPress={() => setOpen(o => !o)} hitSlop={6} style={{ alignSelf: 'flex-start', paddingVertical: 2 }}>
+        <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>{label} {open ? '▴' : '▾'}</Text>
+      </Pressable>
+      {open && (
+        others.isPending ? <ActivityIndicator color={c.muted} style={{ alignSelf: 'flex-start' }} />
+        : others.isError ? <Text style={{ color: c.muted, fontSize: 13 }}>{others.error.message}</Text>
+        : others.data.items.map(o => (
+          <View key={o.cast.hash} style={{ gap: 2, marginTop: 6 }}>
+            <Says cast={o.cast} stance={o.answer} />
+            <View style={{ marginHorizontal: -16 }}>
+              <SideFrame side={o.answer}>
+                <CastCard cast={o.cast} collapse={collapseFor(o.cast.text, o.answer, scheme)} textColor={CAST_BODY[scheme][o.answer]} />
+              </SideFrame>
+            </View>
+          </View>
+        ))
+      )}
     </View>
   )
 }
@@ -215,7 +266,8 @@ const DebateCard = ({ item }: { item: Item }) => {
           {laneLabel(item)}
         </Text>
         <Text style={{ color: c.text, fontSize: 17, fontWeight: '700' }}>{item.question}</Text>
-        <AuthorSide item={item} />
+        <Says cast={item.cast} stance={item.authorStance} />
+        {item.market && <MarketLine item={item} market={item.market} />}
       </View>
       <SideFrame side={item.authorStance}><CastCard cast={item.cast} collapse={collapseFor(item.cast.text, item.authorStance, scheme)} textColor={CAST_BODY[scheme][item.authorStance]} /></SideFrame>
       <View style={{ paddingHorizontal: 16, gap: 6 }}>

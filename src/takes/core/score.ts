@@ -2,12 +2,11 @@
 // takes-classifier/src/lib/score.ts, whose README explains each rule with the measurement
 // that motivated it. Two deliberate differences:
 //
-// 1. One card per ROOT CAST, not per merged question. The classifier merged casts across
-//    threads by question embedding; this client has no matcher yet, so a card is a cast and
-//    its own thread. Cross-thread merging is a later step, not an accident of the port.
-// 2. A following-graph credit, applied at read time per viewer. Like corroboration, it only
-//    orders cards WITHIN a challengeability band: a take from someone you follow beats an
-//    equally debatable stranger, never a clearly more debatable one.
+// 1. One card per ROOT CAST, not per merged question: a card is a cast and its own thread.
+//    Casts that argue the same claim share a market (merge.ts), which a card shows as a line
+//    that expands to the market's other takes; it doesn't fold them into one card.
+// 2. The viewer's following graph splits the feed into two lanes, alternated one-for-one
+//    (mergeFeed); it doesn't reorder cards within a lane.
 
 import type { Claim, StanceResult } from '../schema.ts'
 
