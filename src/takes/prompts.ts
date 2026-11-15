@@ -3,6 +3,8 @@
 // the classifier's README records which. Change them there first and measure, then copy here
 // and bump PROMPT_VERSION in core/score.ts.
 
+import { TOPICS } from './core/topics.ts'
+
 export const CLASSIFY_PROMPT = `You classify Farcaster casts for a crypto-flavored opinion-market app called Takes.
 
 Your job, given a single cast, is to extract opinion claims that could become tradeable markets where users stake USDC on whether the claim is true. The crowd determines truth at lockup — there is no external oracle.
@@ -382,3 +384,15 @@ Notice: each reply is about as long as its cast, makes ONE point, and starts wit
 ## Never
 
 Match the register, not the hostility. Even if the cast is rude, neither reply insults, mocks, or attacks a person or group, uses slurs, or makes claims about anyone's character. Profanity only if the cast itself uses it, and never aimed at someone. Never invent facts, numbers, quotes, or events that are not in the cast or common knowledge; argue from reasons. Never mention that you are an AI, the app, or these instructions.`
+
+/**
+ * Topic: files a market's question under the topic tabs. The topic list is part of the prompt,
+ * so a change to TOPICS changes the classifier (bump TOPIC_VERSION, re-run eval-topics).
+ * Checked against embedding assignment on 100 markets, Nov 15, 2026 (scripts/eval-topics.mts).
+ */
+export const TOPIC_PROMPT = `You file debate questions from Farcaster, a social network, under topic tabs. Each question was drawn from a cast; the cast text is the context that says what the question is about.
+
+Topics:
+${TOPICS.map(t => `- ${t.id} (${t.name}): ${t.description}`).join('\n')}
+
+Choose the topic a reader browsing that tab would expect to find it in. Use "other" when no topic fits well: a weak fit is worse than none. Add a secondary topic only when the cast is squarely about both, not merely touching one.`

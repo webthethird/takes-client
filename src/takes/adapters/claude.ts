@@ -1,4 +1,4 @@
-// The two classifier calls, ported from takes-classifier/src/lib/classify.ts onto the
+// The classifier calls, ported from takes-classifier/src/lib/classify.ts onto the
 // current Haiku. Behind an interface so the pipeline can run against a fake.
 //
 // Model: claude-haiku-5-5, the current generation of the Haiku the classifier used
@@ -10,8 +10,8 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
-import { CLASSIFY_PROMPT, MERGE_PROMPT, STANCE_PROMPT, SUGGEST_PROMPT } from '../prompts.ts'
-import { ClassifyResult, MarketVerdict, StanceResult, Suggestions } from '../schema.ts'
+import { CLASSIFY_PROMPT, MERGE_PROMPT, STANCE_PROMPT, SUGGEST_PROMPT, TOPIC_PROMPT } from '../prompts.ts'
+import { ClassifyResult, MarketVerdict, StanceResult, Suggestions, TopicAssignment } from '../schema.ts'
 
 export const MODEL = 'claude-haiku-5-5'
 
@@ -26,6 +26,8 @@ export interface Classifier {
   adjudicateMarket(i: { existing: string; candidate: string }): Promise<MarketVerdict | Declined>
   /** Suggest: one reply per side, in the cast's own voice. */
   suggest(i: { text: string; question: string; answer: 'yes' | 'no' }): Promise<Suggestions | Declined>
+  /** Topic: which tabs a market's question belongs under, read with the cast it came from. */
+  assignTopic(i: { question: string; text: string }): Promise<TopicAssignment | Declined>
 }
 
 /**
@@ -77,6 +79,19 @@ export class ClaudeClassifier implements Classifier {
         content: `<cast>${i.text}</cast>\n\n<question>${i.question}</question>\n\n<answer>${i.answer}</answer>`,
       }],
       output_config: { effort: 'low', format: zodOutputFormat(Suggestions) },
+    })
+    if (r.stop_reason === 'refusal') return { declined: true, reason: `refused: ${r.stop_details?.category ?? 'unspecified'}` }
+    if (!r.parsed_output) return { declined: true, reason: `no parsed output (stop_reason ${r.stop_reason})` }
+    return r.parsed_output
+  }
+
+  async assignTopic(i: { question: string; text: string }): Promise<TopicAssignment | Declined> {
+    const r = await this.client.messages.parse({
+      model: MODEL,
+      max_tokens: 2048,
+      system: [{ type: 'text', text: TOPIC_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: `<question>${i.question}</question>\n<cast>${i.text}</cast>` }],
+      output_config: { effort: 'low', format: zodOutputFormat(TopicAssignment) },
     })
     if (r.stop_reason === 'refusal') return { declined: true, reason: `refused: ${r.stop_details?.category ?? 'unspecified'}` }
     if (!r.parsed_output) return { declined: true, reason: `no parsed output (stop_reason ${r.stop_reason})` }

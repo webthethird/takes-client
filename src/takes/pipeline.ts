@@ -19,6 +19,7 @@ import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
 import { runMerge, type MergeReport } from './merge.ts'
+import { cardTopics, fromAssignment, TOPIC_VERSION, type StoredTopics } from './core/topics.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
   NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces,
@@ -46,6 +47,8 @@ export type PassReport = {
   declined: number
   scored: number
   dropped: number
+  /** Markets filed under topics this pass. */
+  topics?: number
   stoppedEarly?: string
   merge?: MergeReport
   backfill?: BackfillReport
@@ -189,10 +192,9 @@ export const runScoringPass = async (
     // A market's deleted or taken-down casts are left out of its counts.
     const removed = await index.removed(await store.marketMemberHashes(opinions.map(r => r.hash)))
     const markets = await store.marketContexts(opinions.map(r => r.hash), removed)
-    // Scored: fresh casts, older ones that resurface in the main feed, and every cast in a
-    // multi-cast market, whatever its band, so the "Shared questions" filter shows them all.
+    // Scored: fresh casts, and older ones that resurface (a lower bar when others argue the claim).
     const roots = opinions
-      .filter(r => r.ts >= freshSince || resurfaces(bandOf(r.claim), markets.get(r.hash)?.takes ?? 1) || (markets.get(r.hash)?.takes ?? 1) >= 2)
+      .filter(r => r.ts >= freshSince || resurfaces(bandOf(r.claim), markets.get(r.hash)?.takes ?? 1))
       .sort((a, b) => bandOf(b.claim) - bandOf(a.claim) || b.ts - a.ts)
     const rootCasts = await casts.byHashes(roots.map(r => r.hash))
     const live = roots.filter(r => rootCasts.has(r.hash))
@@ -222,6 +224,44 @@ export const runScoringPass = async (
           return isTransient(e) ? fail(e, 'suggest') : (report.declined++, 'ok')
         }
       }), CONCURRENCY)
+    }
+
+    /* 2d. Topics: file each card's market under the topic tabs, once per TOPIC_VERSION, read
+       with one of its live casts. Shares the budget, after suggestions: a card shows in the
+       main feed without a topic, but not without its suggestions. */
+    const marketOf = (hash: string) => markets.get(hash)?.id ?? null
+    const liveMarkets = [...new Set(live.map(r => marketOf(r.hash)).filter((m): m is string => m !== null))]
+    let filed = await store.topicsOf(liveMarkets, TOPIC_VERSION)
+    const unfiled = new Map<string, OpinionRoot>()
+    for (const r of live) {
+      const m = marketOf(r.hash)
+      if (m !== null && !filed.has(m) && !unfiled.has(m)) unfiled.set(m, r)
+    }
+    if (unfiled.size > 0 && !stop && budget > 0) {
+      await names.ensure([...unfiled.values()].map(r => rootCasts.get(r.hash)!))
+      await pool([...unfiled].map(([marketId, root]) => async () => {
+        if (!spend()) return 'stop'
+        // Recorded either way, as Other when it can't be filed, or it would be asked every minute.
+        const file = (topics: StoredTopics, reason: string) =>
+          store.putTopics({ marketId, version: TOPIC_VERSION, topics, reason: reason.slice(0, 200), now })
+        try {
+          const r = await classifier.assignTopic({ question: root.claim.question, text: names.render(rootCasts.get(root.hash)!) })
+          if (isDeclined(r)) {
+            report.declined++
+            await file({ primary: 'other', secondary: null }, r.reason)
+            return 'ok'
+          }
+          await file(fromAssignment(r), r.reason)
+          report.topics = (report.topics ?? 0) + 1
+          return 'ok'
+        } catch (e) {
+          if (isTransient(e)) return fail(e, 'topic')
+          report.declined++
+          await file({ primary: 'other', secondary: null }, `error: ${String(e)}`)
+          return 'ok'
+        }
+      }), CONCURRENCY)
+      filed = await store.topicsOf(liveMarkets, TOPIC_VERSION)
     }
 
     let stances = await store.stances(live.map(r => r.hash))
@@ -276,9 +316,10 @@ export const runScoringPass = async (
     stances = await store.stances(live.map(r => r.hash))
     await store.putScores(live.map(root => ({
       root, score: scoreCard(root, root.claim, stances.get(root.hash) ?? [], markets.get(root.hash) ?? NO_MARKET),
+      topics: cardTopics(filed.get(marketOf(root.hash) ?? '')),
     })), now)
     // Also dropped: cards no longer eligible, such as an older cast whose market lost its other
-    // take, so a stale row can't keep it in the feed or the "Shared questions" filter.
+    // take, so a stale row can't keep it in the feed or a topic tab.
     const chosen = new Set(roots.map(r => r.hash))
     const ineligible = opinions.filter(r => !chosen.has(r.hash)).map(r => r.hash)
     await store.dropScores([...gone, ...ineligible])

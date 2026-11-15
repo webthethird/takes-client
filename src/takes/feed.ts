@@ -14,6 +14,7 @@ import { matchCasing } from './core/text.ts'
 import { fillPage } from './core/page.ts'
 import { isFlipped, orient, tallyOn } from './core/market.ts'
 import { takesConfig, type Env } from './config.ts'
+import { isTopicId, tabsFrom } from './core/topics.ts'
 import {
   FRESH_HOURS, MARKET_RESURFACE_MIN_BAND, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
   encodeCursor, mergeFeed, onePerMarket, rankFeed, SUGGEST_VERSION, toLanes, type FeedCursor,
@@ -80,27 +81,29 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   const limit = Number.isSafeInteger(asked) ? Math.min(Math.max(asked, 1), MAX_LIMIT) : DEFAULT_LIMIT
   const at = decodeCursor(url.searchParams.get('cursor'))
   if (!at) return json({ defined: true, code: 'BAD_INPUT', message: 'cursor is not one this feed issued' }, 400)
-  // filter=markets: only casts whose claim other casts also argue ("Shared questions"), older
-  // ones included whatever their band. Same ranking and lane split; its own cursor sequence.
-  const filter = url.searchParams.get('filter') ?? 'all'
-  if (filter !== 'all' && filter !== 'markets') return json({ defined: true, code: 'BAD_INPUT', message: 'filter must be all or markets' }, 400)
-  const onlyMarkets = filter === 'markets'
+  // topic=<id>: one topic tab. Same pool, gates and one-card-per-market rule as "For you", but in
+  // plain rank order: no even split between follows and others, which a narrow topic would
+  // starve (few follows post about any one subject). Its own cursor sequence.
+  const topic = url.searchParams.get('topic') ?? undefined
+  if (topic !== undefined && !isTopicId(topic)) return json({ defined: true, code: 'BAD_INPUT', message: 'topic is not one of the tabs' }, 400)
 
   const cfg = takesConfig(env)
   const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
   const freshSince = now - FRESH_HOURS * 3600
   const [fresh, old, follows] = await Promise.all([
-    store.scores({ since: freshSince, until: now + 1, minBand: 0, onlyMarkets, limit: FRESH_POOL }),
+    store.scores({ since: freshSince, until: now + 1, minBand: 0, topic, limit: FRESH_POOL }),
     store.scores({
-      since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, onlyMarkets, limit: OLD_POOL,
-      ...(onlyMarkets ? { minBand: 0, marketMinBand: 0 } : { minBand: RESURFACE_MIN_BAND, marketMinBand: MARKET_RESURFACE_MIN_BAND }),
+      since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, minBand: RESURFACE_MIN_BAND,
+      marketMinBand: MARKET_RESURFACE_MIN_BAND, topic, limit: OLD_POOL,
     }),
     cfg.viewerFid === null ? Promise.resolve(new Set<number>()) : store.follows(cfg.viewerFid),
   ])
   // One card per market, led by its best-ranked cast; the card shows the others.
   const ranked = onePerMarket(rankFeed(fresh, follows), rankFeed(old, follows))
-  const freshLanes = toLanes(ranked.fresh)
-  const oldLanes = toLanes(ranked.old)
+  // A tab ranks everything as one lane; "following" stays on each card for the UI.
+  const lanes = <T extends { following: boolean }>(rows: T[]) => (topic ? { following: [], others: rows } : toLanes(rows))
+  const freshLanes = lanes(ranked.fresh)
+  const oldLanes = lanes(ranked.old)
   const slots = mergeFeed(freshLanes, oldLanes, RESURFACE_EVERY, at, limit + HYDRATE_SLACK)
 
   // Hydrate more than the page needs: a cast deleted since it was scored is skipped.
@@ -225,4 +228,20 @@ export const takesMarket = async (req: Request, env: Env, ctx: ExecutionContext,
   }
   const items = loaded.filter(l => typeof l.cast === 'object').map(l => ({ cast: l.cast, answer: orient(l.m.stored, flipped) }))
   return json({ items })
+}
+
+/**
+ * GET /api/takes/topics: the topic tabs worth showing, busiest first, each with its card count
+ * (core/topics.ts tabsFrom). Counted over the same windows and gates as the feed.
+ */
+export const takesTopics = async (req: Request, env: Env, now: number): Promise<Response> => {
+  if (req.method !== 'GET') return json({ defined: true, code: 'NOT_FOUND', message: 'Not found' }, 404)
+  if (env.ACCESS !== 'public' && !req.headers.get('authorization')?.startsWith('Bearer ')) return unauthorized()
+  const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
+  const freshSince = now - FRESH_HOURS * 3600
+  const cards = await store.topicCards({
+    freshSince, oldSince: now - RESURFACE_MAX_DAYS * 86_400, until: now + 1,
+    minBand: RESURFACE_MIN_BAND, marketMinBand: MARKET_RESURFACE_MIN_BAND,
+  })
+  return json({ topics: tabsFrom(cards).map(t => ({ id: t.id, name: t.name, cards: t.cards })) })
 }

@@ -2,6 +2,7 @@
 
 import type { Claim } from '../schema.ts'
 import type { CardScore, ReplyStance, Stance } from '../core/score.ts'
+import type { CardTopics, StoredTopics } from '../core/topics.ts'
 
 /** Hashes per bound JSON array: ~44 bytes each keeps a parameter near 20 KB. */
 const CHUNK = 400
@@ -328,33 +329,86 @@ export class TakesStore {
 
   /* Scores */
 
-  async putScores(rows: ReadonlyArray<{ root: OpinionRoot; score: CardScore }>, now: number): Promise<void> {
+  /** Cards, with their topics as columns (null when none: Other, or not filed yet). */
+  async putScores(rows: ReadonlyArray<{ root: OpinionRoot; score: CardScore; topics?: CardTopics }>, now: number): Promise<void> {
     if (rows.length === 0) return
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO scores (hash, fid, ts, band, credit, both_sides, yes_authors, no_authors, question,
-         challenge_reason, author_stance, rebuttal_hash, rebuttal_fid, updated_ts, market_takes, market_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
+         challenge_reason, author_stance, rebuttal_hash, rebuttal_fid, updated_ts, market_takes, market_id, topic_a, topic_b)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
     )
-    await this.db.batch(rows.map(({ root, score: s }) => stmt.bind(
+    await this.db.batch(rows.map(({ root, score: s, topics }) => stmt.bind(
       root.hash, root.fid, root.ts, s.band, s.credit, s.bothSides ? 1 : 0, s.yesAuthors, s.noAuthors, root.claim.question,
       root.claim.challenge_reason, root.claim.answer, s.rebuttal?.hash ?? null, s.rebuttal?.fid ?? null, now, s.marketTakes, s.marketId,
+      topics?.a ?? null, topics?.b ?? null,
     )))
   }
 
-  /** Scores for casts in [since, until) at `minBand` or above, best band first, bounded. */
   /**
    * Scored cards in [since, until) at `minBand` or above; with `marketMinBand`, also cards whose
-   * market has other takes from that band up (resurfacing; see core/score.ts resurfaces).
+   * market has other takes from that band up (resurfacing; see core/score.ts resurfaces). With
+   * `topic`, only cards filed under it, as either of their two topics.
    */
-  async scores(opts: { since: number; until: number; minBand: number; marketMinBand?: number; onlyMarkets?: boolean; limit: number }): Promise<ScoreRow[]> {
+  async scores(opts: { since: number; until: number; minBand: number; marketMinBand?: number; topic?: string; limit: number }): Promise<ScoreRow[]> {
     const { results } = await this.db.prepare(
       `SELECT hash, fid, ts, band, credit, both_sides, yes_authors, no_authors, question, challenge_reason,
               author_stance, rebuttal_hash, rebuttal_fid, market_id
          FROM scores WHERE ts >= ?1 AND ts < ?2 AND (band >= ?3 OR (market_takes >= 2 AND band >= ?5))
-          AND (?6 = 0 OR market_takes >= 2)
+          AND (?6 IS NULL OR topic_a = ?6 OR topic_b = ?6)
         ORDER BY band DESC, ts DESC LIMIT ?4`,
-    ).bind(opts.since, opts.until, opts.minBand, opts.limit, opts.marketMinBand ?? opts.minBand, opts.onlyMarkets ? 1 : 0).all<ScoreRow>()
+    ).bind(opts.since, opts.until, opts.minBand, opts.limit, opts.marketMinBand ?? opts.minBand, opts.topic ?? null).all<ScoreRow>()
     return results
+  }
+
+  /**
+   * Cards per topic, as the feed would show them: each market counted once (its casts share a
+   * card), over the fresh window and the resurfacing window with its bars. Topics with no cards
+   * are absent.
+   */
+  async topicCards(opts: { freshSince: number; oldSince: number; until: number; minBand: number; marketMinBand: number }):
+    Promise<Map<string, number>> {
+    const { results } = await this.db.prepare(
+      `WITH shown AS (
+         SELECT coalesce(market_id, hash) AS card, topic_a, topic_b FROM scores
+          WHERE ts < ?3 AND (ts >= ?1 OR (ts >= ?2 AND (band >= ?4 OR (market_takes >= 2 AND band >= ?5))))
+       ), filed AS (
+         SELECT card, topic_a AS topic FROM shown WHERE topic_a IS NOT NULL
+         UNION SELECT card, topic_b FROM shown WHERE topic_b IS NOT NULL
+       )
+       SELECT topic, count(DISTINCT card) AS cards FROM filed GROUP BY topic`,
+    ).bind(opts.freshSince, opts.oldSince, opts.until, opts.minBand, opts.marketMinBand).all<{ topic: string; cards: number }>()
+    return new Map(results.map(r => [r.topic, r.cards]))
+  }
+
+  /* Topics: each market filed once per version (core/topics.ts) */
+
+  /** Markets' filed topics under `version`; markets not yet filed are absent. */
+  async topicsOf(marketIds: readonly string[], version: string): Promise<Map<string, StoredTopics>> {
+    const out = new Map<string, StoredTopics>()
+    for (let i = 0; i < marketIds.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        `SELECT market_id, rank, topic_id FROM market_topics
+          WHERE version = ?1 AND market_id IN (SELECT value FROM json_each(?2)) ORDER BY rank`,
+      ).bind(version, JSON.stringify(marketIds.slice(i, i + CHUNK))).all<{ market_id: string; rank: number; topic_id: string }>()
+      for (const r of results) {
+        const cur = out.get(r.market_id) ?? { primary: 'other', secondary: null }
+        if (r.rank === 1) cur.primary = r.topic_id
+        else cur.secondary = r.topic_id
+        out.set(r.market_id, cur)
+      }
+    }
+    return out
+  }
+
+  /** Files a market. 'other' at rank 1 records that it fits no topic, so it isn't asked again. */
+  async putTopics(t: { marketId: string; version: string; topics: StoredTopics; reason: string; now: number }): Promise<void> {
+    const stmt = this.db.prepare(
+      'INSERT OR REPLACE INTO market_topics (market_id, version, rank, topic_id, reason, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+    )
+    await this.db.batch([
+      stmt.bind(t.marketId, t.version, 1, t.topics.primary, t.reason, t.now),
+      ...(t.topics.secondary ? [stmt.bind(t.marketId, t.version, 2, t.topics.secondary, t.reason, t.now)] : []),
+    ])
   }
 
   /**

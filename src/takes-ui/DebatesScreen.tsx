@@ -8,8 +8,8 @@ import { routes } from '@warpstack/app-core'
 import { Cast } from '@warpstack/contract'
 import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
-import { useMemo, useState, type ReactNode } from 'react'
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useColorScheme, View } from 'react-native'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useColorScheme, View, type ScrollViewInstance } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { collapseFor } from './collapse.ts'
@@ -50,14 +50,19 @@ const fetchMarket = async (id: string, forHash: string): Promise<z.infer<typeof 
 }
 const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
 
-type Filter = 'all' | 'markets'
-const FILTERS: Array<{ key: Filter; label: string }> = [
-  { key: 'all', label: 'All debates' },
-  { key: 'markets', label: 'Shared questions' },
-]
+const Topics = z.object({ topics: z.array(z.object({ id: z.string(), name: z.string(), cards: z.number().int() })) })
+type TopicTab = z.infer<typeof Topics>['topics'][number]
 
-const fetchFeed = async (filter: Filter, cursor: string | null): Promise<z.infer<typeof Feed>> => {
-  const q = new URLSearchParams({ filter, ...(cursor ? { cursor } : {}) })
+/** The topic tabs worth showing, busiest first (the server hides sparse ones). */
+const fetchTopics = async (): Promise<TopicTab[]> => {
+  const res = await fetch(`${apiUrl}/api/takes/topics`, { headers: { accept: 'application/json' } })
+  if (!res.ok) throw new Error(`The topics did not load (${res.status}).`)
+  return Topics.parse(await res.json()).topics
+}
+
+/** `topic` null: "For you", the main feed. */
+const fetchFeed = async (topic: string | null, cursor: string | null): Promise<z.infer<typeof Feed>> => {
+  const q = new URLSearchParams({ ...(topic ? { topic } : {}), ...(cursor ? { cursor } : {}) })
   const res = await fetch(`${apiUrl}/api/takes/feed?${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 401) throw new Error('This server is private. Sign in on the phone app to see the feed.')
   // The server ends a page early rather than skip cards it couldn't read; retrying resumes there.
@@ -323,30 +328,69 @@ const Footer = ({ loading, error, retry }: { loading: boolean; error: Error | nu
   )
 }
 
-/** Chips above the feed: which cards it shows. Topic tabs will join this row. */
-const FilterBar = ({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) => {
+/**
+ * Tabs above the feed: "For you", then the topics, busiest first, in one row that scrolls
+ * sideways (up to 18 tabs). The row runs to the screen's edge, so a cut-off tab shows there's
+ * more, and an arrow at each end appears while there's more that way: on the web a mouse can't
+ * easily scroll sideways, so the arrows are also how you get there. Stuck to the top of the
+ * list, so it has a solid background. If the topics don't load, "For you" is still there.
+ */
+const TopicBar = ({ value, onChange }: { value: string | null; onChange: (t: string | null) => void }) => {
   const c = useColors()
+  const topics = useQuery({ queryKey: ['takes', 'topics'], queryFn: fetchTopics, staleTime: 60_000 })
+  const scroller = useRef<ScrollViewInstance>(null)
+  const [at, setAt] = useState({ x: 0, width: 0, content: 0 })
+  const tabs: Array<{ id: string | null; label: string }> = [
+    { id: null, label: 'For you' },
+    ...(topics.data ?? []).map(t => ({ id: t.id, label: t.name })),
+  ]
+  // A tab picked earlier stays, even after it drops below the bar for showing.
+  if (value !== null && !tabs.some(t => t.id === value)) tabs.push({ id: value, label: value })
+  const moreLeft = at.x > 4
+  const moreRight = at.x + at.width < at.content - 4
+  const page = (dir: 1 | -1) => scroller.current?.scrollTo({ x: Math.max(0, at.x + dir * at.width * 0.7), animated: true })
+  const arrow = (dir: 1 | -1) => (
+    <Pressable accessibilityRole="button" accessibilityLabel={dir === 1 ? 'More topics' : 'Previous topics'} onPress={() => page(dir)}
+      style={({ pressed }) => ({
+        position: 'absolute', top: 0, bottom: 0, [dir === 1 ? 'right' : 'left']: 0, width: 40,
+        alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? c.pressed : c.bg,
+        [dir === 1 ? 'borderLeftWidth' : 'borderRightWidth']: 1, borderColor: c.border,
+      })}>
+      <Text style={{ color: c.text, fontSize: 22, fontWeight: '600', lineHeight: 24 }}>{dir === 1 ? '›' : '‹'}</Text>
+    </Pressable>
+  )
   return (
-    <View accessibilityRole="tablist" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}>
-      {FILTERS.map(f => {
-        const on = f.key === value
-        return (
-          <Pressable key={f.key} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(f.key)}
-            style={{ borderRadius: 999, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? c.accent : 'transparent', paddingHorizontal: 14, paddingVertical: 6 }}>
-            <Text style={{ color: on ? c.accentText : c.text, fontSize: 14, fontWeight: '600' }}>{f.label}</Text>
-          </Pressable>
-        )
-      })}
+    <View style={{ backgroundColor: c.bg }}>
+      <ScrollView ref={scroller} horizontal showsHorizontalScrollIndicator={false} accessibilityRole="tablist"
+        // flexGrow 0: without it a horizontal ScrollView fills the height of its column (seen
+        // while the feed loads: every tab stretched down the page).
+        style={{ flexGrow: 0 }} contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}
+        scrollEventThrottle={32}
+        onScroll={e => { const x = e.nativeEvent.contentOffset.x; setAt(a => ({ ...a, x })) }}
+        onLayout={e => { const width = e.nativeEvent.layout.width; setAt(a => ({ ...a, width })) }}
+        onContentSizeChange={content => setAt(a => ({ ...a, content }))}>
+        {tabs.map(t => {
+          const on = t.id === value
+          return (
+            <Pressable key={t.id ?? ''} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(t.id)}
+              style={{ borderRadius: 999, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? c.accent : 'transparent', paddingHorizontal: 14, paddingVertical: 6 }}>
+              <Text style={{ color: on ? c.accentText : c.text, fontSize: 14, fontWeight: '600' }}>{t.label}</Text>
+            </Pressable>
+          )
+        })}
+      </ScrollView>
+      {moreLeft && arrow(-1)}
+      {moreRight && arrow(1)}
     </View>
   )
 }
 
 export const DebatesScreen = () => {
   const c = useColors()
-  const [filter, setFilter] = useState<Filter>('all')
+  const [topic, setTopic] = useState<string | null>(null)
   const feed = useInfiniteQuery({
-    queryKey: ['takes', 'feed', filter],
-    queryFn: ({ pageParam }) => fetchFeed(filter, pageParam),
+    queryKey: ['takes', 'feed', topic],
+    queryFn: ({ pageParam }) => fetchFeed(topic, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: last => last.next,
     staleTime: 30_000,
@@ -357,7 +401,7 @@ export const DebatesScreen = () => {
     const seen = new Set<string>()
     return (feed.data?.pages ?? []).flatMap(p => p.items).filter(i => !seen.has(i.cast.hash) && (seen.add(i.cast.hash), true))
   }, [feed.data])
-  const bar = <FilterBar value={filter} onChange={setFilter} />
+  const bar = <TopicBar value={topic} onChange={setTopic} />
   if (feed.isPending) return <View style={{ flex: 1 }}>{bar}<Loading /></View>
   if (feed.isError && items.length === 0) return <View style={{ flex: 1 }}>{bar}<Message tone="danger">{feed.error.message}</Message></View>
   const more = () => { if (feed.hasNextPage && !feed.isFetchingNextPage && !feed.isFetchNextPageError) void feed.fetchNextPage() }
@@ -379,8 +423,9 @@ export const DebatesScreen = () => {
         <RefreshControl refreshing={feed.isRefetching && !feed.isFetchingNextPage} onRefresh={() => void feed.refetch()} tintColor={c.muted} />
       }
       ListHeaderComponent={bar}
-      ListEmptyComponent={filter === 'markets'
-        ? <Message>No shared questions yet: a question shows here once two casts argue it.</Message>
+      stickyHeaderIndices={[0]}
+      ListEmptyComponent={topic !== null
+        ? <Message>No debates in this topic right now.</Message>
         : <Message>Nothing debatable yet. Takes classifies new casts every minute; check back shortly.</Message>}
     />
   )

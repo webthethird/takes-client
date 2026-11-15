@@ -2,6 +2,7 @@
 // client has no use for yet). Field order and descriptions are part of the prompt: structured
 // output is generated in schema order, so keep them in sync with the classifier.
 import { z } from "zod";
+import { TOPICS } from "./core/topics.ts";
 
 // Stage 1 output: structured extraction from a single cast.
 // One cast can contain multiple claims (multi-topic case).
@@ -169,3 +170,20 @@ export const Suggestions = z.object({
     ),
 });
 export type Suggestions = z.infer<typeof Suggestions>;
+
+// ── Topic: which tabs a market is filed under (client-only; topics in core/topics.ts) ──
+//
+// Field order is load-bearing: what the cast is about is said before a topic is picked.
+
+const TOPIC_IDS = TOPICS.map(t => t.id) as [string, ...string[]];
+
+export const TopicAssignment = z.object({
+  reason: z.string().describe("A few words: what the cast is actually about."),
+  primary: z
+    .enum([...TOPIC_IDS, "other"])
+    .describe('The one topic it most belongs to, or "other" if none fits well.'),
+  secondary: z
+    .enum([...TOPIC_IDS, "none"])
+    .describe('A second topic only if the cast is squarely about both; usually "none".'),
+});
+export type TopicAssignment = z.infer<typeof TopicAssignment>;
