@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim } from '../schema.ts'
 import {
-  CHALLENGE_BAND, FOLLOWING_CREDIT, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, interleave, interleaveFrom, pickRebuttal, rankFeed, reconcileStance, scoreCard, type ReplyStance,
+  CHALLENGE_BAND, FEED_START, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, mergeAll, mergeFeed, pickRebuttal, rankFeed, reconcileStance, scoreCard, toLanes, type Lanes, type ReplyStance,
 } from './score.ts'
 
-describe('interleaveFrom: pages resume the same sequence', () => {
-  const fresh = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']
-  const old = ['o1', 'o2']
+const lanes = (following: string[], others: string[]): Lanes<string> => ({ following, others })
+const none = lanes([], [])
+
+describe('mergeFeed: pages resume the same sequence', () => {
+  const fresh = lanes(['F1', 'F2', 'F3', 'F4'], ['f1', 'f2', 'f3'])
+  const old = lanes(['O1'], ['o1', 'o2'])
   it('any page split concatenates to the unpaged feed', () => {
-    const whole = interleave(fresh, old, 4)
+    const whole = mergeAll(fresh, old, 4)
+    expect(whole).toHaveLength(10)
     for (const size of [1, 2, 3, 5, 7]) {
       const got: string[] = []
-      let at = { f: 0, o: 0 }
+      let at = FEED_START
       for (;;) {
-        const page = interleaveFrom(fresh, old, 4, at, size)
+        const page = mergeFeed(fresh, old, 4, at, size)
         if (page.length === 0) break
         got.push(...page.map(e => e.item))
         at = page[page.length - 1]!.after
@@ -22,30 +26,42 @@ describe('interleaveFrom: pages resume the same sequence', () => {
     }
   })
   it('marks resurfaced rows and reports the cursor past each', () => {
-    const page = interleaveFrom(fresh, old, 4, { f: 3, o: 0 }, 2)
-    expect(page.map(e => [e.item, e.resurfaced])).toEqual([['o1', true], ['f4', false]])
-    expect(page[1]!.after).toEqual({ f: 4, o: 1 })
+    const page = mergeFeed(fresh, old, 4, { ff: 2, fo: 1, of: 0, oo: 0 }, 2)
+    expect(page.map(e => [e.item, e.resurfaced])).toEqual([['O1', true], ['f2', false]])
+    expect(page[1]!.after).toEqual({ ff: 2, fo: 2, of: 1, oo: 0 })
+  })
+})
+
+describe('mergeFeed: the viewer\'s graph gets half the slots, not more', () => {
+  it('alternates follows and others, follows first, each in rank order', () => {
+    expect(mergeAll(lanes(['F1', 'F2', 'F3'], ['f1', 'f2', 'f3']), none, 4)).toEqual(['F1', 'f1', 'F2', 'f2', 'F3', 'f3'])
+  })
+  it('keeps the split within one card at every point, while both lanes last', () => {
+    const feed = mergeAll(lanes(Array.from({ length: 50 }, (_, i) => `F${i}`), Array.from({ length: 50 }, (_, i) => `f${i}`)), none, 4)
+    let diff = 0
+    for (const c of feed) { diff += c.startsWith('F') ? 1 : -1; expect(Math.abs(diff)).toBeLessThanOrEqual(1) }
+  })
+  it('when one lane runs out, the other fills the rest, losing nothing', () => {
+    expect(mergeAll(lanes(['F1', 'F2', 'F3', 'F4'], ['f1']), none, 4)).toEqual(['F1', 'f1', 'F2', 'F3', 'F4'])
+    expect(mergeAll(lanes([], ['f1', 'f2']), none, 4)).toEqual(['f1', 'f2']) // no viewer: no follows
+  })
+  it('splits resurfaced cards the same way, in every n-th slot', () => {
+    expect(mergeAll(lanes(['F1', 'F2', 'F3'], ['f1', 'f2', 'f3']), lanes(['O1'], ['o1']), 4))
+      .toEqual(['F1', 'f1', 'F2', 'O1', 'f2', 'F3', 'f3', 'o1'])
+  })
+  it('fills from whichever stream remains', () => {
+    expect(mergeAll(lanes(['F1'], []), lanes(['O1'], ['o1']), 4)).toEqual(['F1', 'O1', 'o1'])
+    expect(mergeAll(none, none, 4)).toEqual([])
   })
 })
 
 describe('feed cursors', () => {
-  it('round-trips, starts at the top when absent, and rejects junk', () => {
-    expect(decodeCursor(encodeCursor({ f: 12, o: 3 }))).toEqual({ f: 12, o: 3 })
-    expect(decodeCursor(null)).toEqual({ f: 0, o: 0 })
-    expect(decodeCursor('12')).toBeNull()
-    expect(decodeCursor('-1.0')).toBeNull()
-    expect(decodeCursor('1.2.3')).toBeNull()
-  })
-})
-
-describe('interleave', () => {
-  it('puts a resurfaced card in every n-th slot', () => {
-    expect(interleave(['f1', 'f2', 'f3', 'f4', 'f5', 'f6'], ['o1', 'o2'], 4)).toEqual(['f1', 'f2', 'f3', 'o1', 'f4', 'f5', 'f6', 'o2'])
-  })
-  it('fills from whichever list remains, losing nothing', () => {
-    expect(interleave(['f1'], ['o1', 'o2'], 4)).toEqual(['f1', 'o1', 'o2'])
-    expect(interleave([], ['o1'], 4)).toEqual(['o1'])
-    expect(interleave(['f1', 'f2'], [], 4)).toEqual(['f1', 'f2'])
+  it('round-trips, starts at the top when absent, and rejects junk and the old two-part form', () => {
+    expect(decodeCursor(encodeCursor({ ff: 12, fo: 3, of: 1, oo: 0 }))).toEqual({ ff: 12, fo: 3, of: 1, oo: 0 })
+    expect(decodeCursor(null)).toEqual(FEED_START)
+    expect(decodeCursor('12.3')).toBeNull()
+    expect(decodeCursor('-1.0.0.0')).toBeNull()
+    expect(decodeCursor('1.2.3.4.5')).toBeNull()
   })
 })
 
@@ -159,23 +175,17 @@ describe('reconcileStance (ported cases)', () => {
   })
 })
 
-describe('rankFeed: following reorders within a band, never across', () => {
+describe('rankFeed: debatability alone orders cards', () => {
   const row = (hash: string, fid: number, band: number, credit: number, ts = 100) => ({ hash, fid, band, credit, ts })
 
-  it('a followed author beats an equally debatable stranger', () => {
-    const ranked = rankFeed([row('0x01', 10, 7, 0), row('0x02', 20, 7, 0)], new Set([20]))
+  it('following does not move a card; it only marks its lane', () => {
+    const ranked = rankFeed([row('0x01', 10, 7, 0.2), row('0x02', 20, 7, 0)], new Set([20]))
+    expect(ranked.map(r => r.hash)).toEqual(['0x01', '0x02'])
+    expect(toLanes(ranked).following.map(r => r.hash)).toEqual(['0x02'])
+  })
+  it('credit never crosses a band', () => {
+    const ranked = rankFeed([row('0x01', 10, 6, 5), row('0x02', 20, 7, 0)], new Set())
     expect(ranked.map(r => r.hash)).toEqual(['0x02', '0x01'])
-    expect(ranked[0]!.following).toBe(true)
-  })
-  it('a followed author never beats a stranger one band up, even with full credit', () => {
-    const ranked = rankFeed([row('0x01', 10, 7, 0), row('0x02', 20, 6, 0.99)], new Set([20]))
-    expect(ranked.map(r => r.hash)).toEqual(['0x01', '0x02'])
-  })
-  it('within-band credit can outweigh following', () => {
-    // A live two-sided argument (0.5) beats a followed author with no corroboration (0.3).
-    expect(FOLLOWING_CREDIT).toBeLessThan(0.5)
-    const ranked = rankFeed([row('0x01', 10, 7, 0.5), row('0x02', 20, 7, 0)], new Set([20]))
-    expect(ranked.map(r => r.hash)).toEqual(['0x01', '0x02'])
   })
   it('is a total order: newer first, then hash', () => {
     const ranked = rankFeed([row('0x02', 1, 5, 0, 100), row('0x01', 1, 5, 0, 100), row('0x03', 1, 5, 0, 200)], new Set())

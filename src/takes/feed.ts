@@ -14,7 +14,7 @@ import { matchCasing } from './core/text.ts'
 import { takesConfig, type Env } from './config.ts'
 import {
   FRESH_HOURS, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
-  encodeCursor, interleaveFrom, rankFeed, SUGGEST_VERSION, type FeedCursor,
+  encodeCursor, mergeFeed, rankFeed, SUGGEST_VERSION, toLanes, type FeedCursor,
 } from './core/score.ts'
 
 type Fetch = (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>
@@ -57,9 +57,9 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     store.scores({ since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, minBand: RESURFACE_MIN_BAND, limit: OLD_POOL }),
     cfg.viewerFid === null ? Promise.resolve(new Set<number>()) : store.follows(cfg.viewerFid),
   ])
-  const freshRanked = rankFeed(fresh, follows)
-  const oldRanked = rankFeed(old, follows)
-  const slots = interleaveFrom(freshRanked, oldRanked, RESURFACE_EVERY, at, limit + HYDRATE_SLACK)
+  const freshLanes = toLanes(rankFeed(fresh, follows))
+  const oldLanes = toLanes(rankFeed(old, follows))
+  const slots = mergeFeed(freshLanes, oldLanes, RESURFACE_EVERY, at, limit + HYDRATE_SLACK)
 
   // Hydrate more than the page needs: a cast deleted since it was scored is skipped.
   const headers = new Headers({ accept: 'application/json' })
@@ -92,7 +92,8 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     next = h.after
     if (h.cast !== null) kept.push(h)
   }
-  const exhausted = next.f >= freshRanked.length && next.o >= oldRanked.length
+  const exhausted = next.ff >= freshLanes.following.length && next.fo >= freshLanes.others.length &&
+    next.of >= oldLanes.following.length && next.oo >= oldLanes.others.length
 
   // An empty suggestion was declined: sent as null so the boxes fall back to static copy.
   const cased = (cast: unknown, s: string | undefined): string | null => {

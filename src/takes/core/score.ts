@@ -64,8 +64,6 @@ export const PER_AUTHOR_CREDIT = 0.12
 export const MAX_AUTHOR_CREDIT = 0.4
 /** Confidence gates rather than boosts: a shaky extraction drops a band. */
 export const CONFIDENCE_FLOOR = 0.5
-/** The viewer follows the author. Same units as the corroboration credits. */
-export const FOLLOWING_CREDIT = 0.3
 /** Total within-band credit stays below one band, so it can never cross into the next. */
 export const MAX_CREDIT = 0.99
 
@@ -193,54 +191,73 @@ export const pickRebuttal = (rootFid: number, rootAnswer: 'yes' | 'no', replies:
 export type Ranked<T> = T & { following: boolean; key: number }
 
 /**
- * Orders cards for one viewer. Band first; within a band, corroboration plus the following
- * credit, capped below one band; then newer first; then hash, for a total order.
+ * Orders cards by debatability alone: band first; within a band, corroboration, capped below
+ * one band; then newer first; then hash, for a total order. Whether the viewer follows the
+ * author doesn't move a card here; it decides which lane the card fills (mergeFeed).
  */
 export const rankFeed = <T extends { fid: number; band: number; credit: number; ts: number; hash: string }>(
   rows: readonly T[], follows: ReadonlySet<number>,
 ): Ranked<T>[] =>
   rows
-    .map(r => {
-      const following = follows.has(r.fid)
-      return { ...r, following, key: r.band + Math.min(MAX_CREDIT, r.credit + (following ? FOLLOWING_CREDIT : 0)) }
-    })
+    .map(r => ({ ...r, following: follows.has(r.fid), key: r.band + Math.min(MAX_CREDIT, r.credit) }))
     .sort((a, b) => b.key - a.key || b.ts - a.ts || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
 
-/**
- * A position in the merged feed: how many fresh and how many resurfaced rows have been
- * consumed. Counting rows consumed, not cards returned, means a row skipped at hydration (its
- * cast was deleted) still advances the cursor.
- */
-export type FeedCursor = { f: number; o: number }
-export const FEED_START: FeedCursor = { f: 0, o: 0 }
+/** A ranked list split by whether the viewer follows the author, each half still in rank order. */
+export type Lanes<T> = { following: readonly T[]; others: readonly T[] }
+export const toLanes = <T extends { following: boolean }>(ranked: readonly T[]): Lanes<T> =>
+  ({ following: ranked.filter(r => r.following), others: ranked.filter(r => !r.following) })
 
 /**
- * Merges the fresh feed with resurfaced cards, resumably: every `every`-th slot (1-based,
- * counted from the very start of the feed) takes the next resurfaced card while any remain;
- * when either list runs out, the other fills the rest. Each entry carries the cursor just
- * past it, so a page can stop anywhere and the next one continues the same sequence.
+ * A position in the merged feed: rows consumed from each list (fresh or resurfaced, following
+ * or others). Counting rows consumed, not cards returned, means a row skipped at hydration (its
+ * cast was deleted) still advances the cursor.
  */
-export const interleaveFrom = <T>(fresh: readonly T[], old: readonly T[], every: number, at: FeedCursor, take: number):
+export type FeedCursor = { ff: number; fo: number; of: number; oo: number }
+export const FEED_START: FeedCursor = { ff: 0, fo: 0, of: 0, oo: 0 }
+
+/**
+ * Which lane fills the next slot of a stream that has taken `i` following and `j` others rows:
+ * they alternate, following first, so the split stays even (it never differs by more than
+ * one) while both last. When one runs out, the other fills the rest. Null: both are empty.
+ */
+const laneFor = <T>(l: Lanes<T>, i: number, j: number): 'following' | 'others' | null => {
+  const f = i < l.following.length, o = j < l.others.length
+  if (f && (i <= j || !o)) return 'following'
+  return o ? 'others' : null
+}
+
+/**
+ * The feed, resumably. Every `every`-th slot (1-based, from the very start of the feed) takes
+ * the next resurfaced card while any remain; when either stream runs out, the other fills the
+ * rest. Within each stream, cards from people the viewer follows alternate with everyone
+ * else's, so neither side of the viewer's graph can crowd out the other. Each entry carries
+ * the cursor just past it, so a page can stop anywhere and the next continues the sequence.
+ */
+export const mergeFeed = <T>(fresh: Lanes<T>, old: Lanes<T>, every: number, at: FeedCursor, take: number):
   Array<{ item: T; resurfaced: boolean; after: FeedCursor }> => {
   const out: Array<{ item: T; resurfaced: boolean; after: FeedCursor }> = []
-  let { f, o } = at
-  while (out.length < take && (f < fresh.length || o < old.length)) {
-    const slotForOld = (f + o + 1) % every === 0
-    const fromOld = (slotForOld && o < old.length) || f >= fresh.length
-    const item = fromOld ? old[o++]! : fresh[f++]!
-    out.push({ item, resurfaced: fromOld, after: { f, o } })
+  let { ff, fo, of, oo } = at
+  while (out.length < take) {
+    const freshLane = laneFor(fresh, ff, fo)
+    const oldLane = laneFor(old, of, oo)
+    if (!freshLane && !oldLane) break
+    const fromOld = oldLane !== null && ((ff + fo + of + oo + 1) % every === 0 || freshLane === null)
+    let item: T
+    if (fromOld) item = oldLane === 'following' ? old.following[of++]! : old.others[oo++]!
+    else item = freshLane === 'following' ? fresh.following[ff++]! : fresh.others[fo++]!
+    out.push({ item, resurfaced: fromOld, after: { ff, fo, of, oo } })
   }
   return out
 }
 
 /** The whole merged feed from the start. */
-export const interleave = <T>(fresh: readonly T[], old: readonly T[], every: number): T[] =>
-  interleaveFrom(fresh, old, every, FEED_START, Infinity).map(e => e.item)
+export const mergeAll = <T>(fresh: Lanes<T>, old: Lanes<T>, every: number): T[] =>
+  mergeFeed(fresh, old, every, FEED_START, Infinity).map(e => e.item)
 
-/** Cursors travel as "f.o": opaque to clients, trivially validated here. */
-export const encodeCursor = (c: FeedCursor): string => `${c.f}.${c.o}`
+/** Cursors travel as "ff.fo.of.oo": opaque to clients, trivially validated here. */
+export const encodeCursor = (c: FeedCursor): string => `${c.ff}.${c.fo}.${c.of}.${c.oo}`
 export const decodeCursor = (s: string | null): FeedCursor | null => {
   if (s === null || s === '') return FEED_START
-  const m = /^(\d{1,6})\.(\d{1,6})$/.exec(s)
-  return m ? { f: Number(m[1]), o: Number(m[2]) } : null
+  const m = /^(\d{1,6})\.(\d{1,6})\.(\d{1,6})\.(\d{1,6})$/.exec(s)
+  return m ? { ff: Number(m[1]), fo: Number(m[2]), of: Number(m[3]), oo: Number(m[4]) } : null
 }
