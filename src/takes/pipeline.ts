@@ -51,6 +51,20 @@ export type PassReport = {
   backfill?: BackfillReport
 }
 
+/**
+ * An error and its causes, outermost first. The Anthropic SDK wraps a failed fetch as
+ * "Connection error." with the runtime's own error as `cause`; without the chain, a stalled
+ * worker can't be told apart from a down API.
+ */
+export const describeError = (e: unknown): string => {
+  const parts: string[] = []
+  for (let x: unknown = e, depth = 0; x !== undefined && x !== null && depth < 4; depth++) {
+    parts.push(x instanceof Error ? `${x.name}: ${x.message}` : String(x))
+    x = x instanceof Error ? (x as Error & { cause?: unknown }).cause : undefined
+  }
+  return parts.join(' <- ')
+}
+
 const bandOf = (claim: OpinionRoot['claim']) => Math.floor(gatedChallenge(claim) / CHALLENGE_BAND + 1e-9)
 
 /** Runs `jobs` with bounded concurrency until one returns 'stop' or all finish. */
@@ -88,7 +102,7 @@ export const runScoringPass = async (
     let stop: string | undefined
     const spend = () => (budget > 0 && !stop ? (budget--, true) : false)
     const fail = (e: unknown, what: string): 'stop' => {
-      stop ??= `${what}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300)
+      stop ??= `${what}: ${describeError(e)}`.slice(0, 300)
       return 'stop'
     }
 

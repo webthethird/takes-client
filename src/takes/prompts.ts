@@ -286,42 +286,56 @@ is worse.`
 // examples are the cases its README recorded. Bump MERGE_VERSION in core/market.ts on change.
 export const MERGE_PROMPT = `You decide whether two YES/NO questions from an opinion-market app are the SAME market.
 
-Markets are settled by the crowd, so two questions are the same market when they would attract the same people arguing the same thing. People on one side of the first question should be on a definite side of the second.
+A market is one claim. People stake money on it, and its settlement depends on the exact question, so two questions are the same market only when they ask the same thing.
+
+The test: does answering one question settle the answer to the other, for anyone? It may settle it the same way (YES means YES) or the opposite way (YES means NO); both are the same market. If a reasonable person could answer one and still be free to answer the other either way, they are different markets, however close the subject. Grouping related questions by subject happens elsewhere in the app; that is not your job.
 
 ## Same market
 
-Merge generously when a reader would see one argument. This app clusters casts that are roughly about the same thing into one market, and a feed of near-duplicate markets is worse than one market with more people in it.
-
-- Narrower or broader phrasing of one disagreement:
-  "Is the new press secretary competent?" / "Is the new press secretary performing well?"
-- The same claim in different words:
-  "Is the diesel deal strategically significant?" / "Is the fuel deal geopolitically significant?"
-  "Will Base attract the most builders?" / "Will Base earn the most builders?"
-- The same subject given the same overall verdict (good or bad, worth it or not), even through different facets of it. Someone who thinks the thing is good answers both the same way:
-  "Is $DEGEN a good token to hold?" / "Is $DEGEN one of the best projects on Base?" / "Is the Degen project good?"
-- A change and the thing it changes (check polarity below):
-  "Is removing the trending tab a good change?" / "Is the trending tab a good feature?"
+- The same claim in different words, or with the subject named another way:
+  "Should the city ban gas leaf blowers?" / "Should gas-powered leaf blowers be banned in the city?"
+  "Was the Q3 product launch a success?" / "Was the autumn product launch successful?" (the same launch)
+  "Is the ETH merge a good thing?" / "Is Ethereum's switch to proof of stake good?"
+- Synonyms that change nothing a person could disagree about:
+  "Is the new tax plan fair?" / "Is the new tax plan equitable?"
+- The same claim turned around, so that YES to one is NO to the other. This includes judging a thing vs judging getting rid of it, keeping it, or reversing it: whoever thinks the thing is good thinks removing it is bad. These are the same market even though one question is about an action and the other about the thing:
+  "Is the dress code a good policy?" / "Would scrapping the dress code be a good move?"
+  "Should the library stay open late?" / "Should the library's late hours be cut?"
 
 ## Different markets
 
-- The same subject, but a different KIND of question, where people could answer the two differently without contradicting themselves:
-  "Are the Coinbase layoffs bullish for $COIN?" (effect on the stock price) / "Are the Coinbase layoffs a strategic mistake?" (wisdom of the decision)
-  "Is Vitalik honest?" (character) / "Is Vitalik an effective leader?" (ability)
-  "Did the senator behave badly?" (their conduct) / "Is the coverage of the senator fair?" (the coverage)
+Even when the subject and the likely verdict are the same, these are different claims:
+
+- Different things of the same kind, or a vague title and a specific instance:
+  "Is the new album good?" / "Is the lead single good?"
+  "Is the blue jacket worth the price?" / "Is the green jacket worth the price?"
+- Different properties of the same thing (what is being judged differs):
+  "Was the merger legal?" / "Was the merger a good idea?" (legality vs wisdom)
+  "Is the CEO honest?" / "Is the CEO effective?" (character vs ability)
+  "Was the rollout handled well?" / "Was the rollout necessary?" (execution vs need)
+- A part, facet or use of a thing vs the thing as a whole:
+  "Is the app's wallet good?" / "Is the app good?"
+- A ranking or comparison vs an absolute judgment, or a stronger vs weaker claim:
+  "Is Rust the best systems language?" / "Is Rust a good systems language?"
+  "Is podcasting better than blogging?" / "Is podcasting worth doing?"
+  "Should taxes on cars go up?" / "Should taxes on cars double?"
+- Where something is vs where it is heading, or a thing vs the effect of a change to it:
+  "Is the city safe?" / "Is the city getting safer?"
+  "Is the forum healthy?" / "Did the new moderators improve the forum?"
+- A conditional or a consequence vs the claim itself:
+  "If the coach stays, should fans boycott games?" / "Should the coach be fired?"
 - Different events or things, however similar the wording:
   "Will Raikkonen win the championship?" / "Will Raikkonen win the Singapore Grand Prix?"
-- One question is the mechanism or implication of the other, not the same claim:
-  "Is contrarianism easier than people think?" / "Does a cognitive bias make contrarian views seem credible?"
 
 ## Polarity
 
-Similar wording can hide opposite meanings. Decide separately whether a YES to the first question takes the same side as a YES to the second:
+Similar wording can hide opposite meanings. When they are the same market, decide separately whether a YES to the first question takes the same side as a YES to the second:
 
 - "Was the airdrop fair?" / "Was the airdrop unfair?": same market, YES does NOT mean the same.
 - "Should Farcaster drop the storage fee?" / "Should Farcaster keep the storage fee?": same market, YES does NOT mean the same.
-- "Is ketchup good on fries?" / "Is ketchup only for hot dogs?": same market, YES does NOT mean the same.
+- "Is the feature good?" / "Is removing the feature good?": same market, YES does NOT mean the same.
 
-When two questions share a subject and an overall verdict, merge them. Answer false only when someone could reasonably answer them differently without contradicting themselves: that is a different market, and a wrong merge puts people in a market they never joined.`
+When in doubt, answer false. A missed merge leaves two small markets that the app can still show side by side; a wrong merge puts people's stakes on a question they never argued.`
 
 // Client-only (no classifier counterpart): writes one reply for each side of a card, in the
 // original cast's voice. Shown in the side boxes, labelled as AI. Bump SUGGEST_VERSION in

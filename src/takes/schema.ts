@@ -137,7 +137,7 @@ export const MarketVerdict = z.object({
   same_market: z
     .boolean()
     .describe(
-      "True if the two questions would attract the same people arguing the same thing. A narrower or broader phrasing of one disagreement is the same market; a different subject, or a different thing being judged about the same subject, is not.",
+      "True if the two questions are the same claim: answering one settles the answer to the other, either the same way or the opposite way. Rewordings, synonyms and the same thing named differently are the same claim.",
     ),
   yes_means_same: z
     .boolean()

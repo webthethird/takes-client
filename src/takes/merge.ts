@@ -2,15 +2,17 @@
 // every pass. Sequential by design: each new market changes what later claims can match, and
 // processing oldest first makes the earliest question canonical, as on-chain.
 //
-//   identical text   -> join (same string, same hash, same on-chain market)
-//   similarity >= 0.82 -> join; Claude checks only whether YES means the same in both
-//   0.70 .. 0.82      -> Claude decides whether it is the same market, and the polarity
-//   otherwise         -> found a new market
+//   identical text    -> join (same string, same hash, same on-chain market)
+//   similarity >= 0.70 -> Claude decides whether it is the same CLAIM as the market's
+//                         canonical question, and the polarity (MERGE_PROMPT, merge-5)
+//   otherwise          -> found a new market
 //
 // Similarity is the best over the market's canonical question AND every member's question, so
-// a market is found through its closest cast. Claude always compares with the CANONICAL
+// a market is found through its closest cast. Claude always decides against the CANONICAL
 // question, though: every member is judged against one anchor, so a chain of near neighbours
 // can't drift a market away from its title, and polarity is always relative to the title.
+// (Before merge-5, similarity alone admitted joins at >= 0.82, and drift happened: see
+// MATCH_THRESHOLD in core/market.ts.)
 //
 // A question Claude declines to compare founds its own market: a missed merge costs two
 // small markets, a wrong one puts people in a market they never joined.
@@ -142,10 +144,8 @@ export const runMerge = async (opts: {
     }
     report.adjudicated++
     if (isDeclined(verdict)) { await found(); continue }
-    // At or above the match threshold, similarity decides membership and Claude only the
-    // polarity; in the ambiguous band Claude decides both.
-    const same = plan.kind === 'join' || verdict.same_market
-    if (!same) { await found(); continue }
+    // Claude decides membership in every band; similarity only found the candidate.
+    if (!verdict.same_market) { await found(); continue }
     await store.putMember({
       ...member, marketId: plan.market.id, answer: canonicalAnswer(answer, verdict.yes_means_same),
       via: plan.kind === 'join' ? 'join' : 'adjudicated', similarity: plan.similarity, detail: verdict,

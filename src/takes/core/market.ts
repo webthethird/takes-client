@@ -13,15 +13,19 @@ import { keccak_256 } from '@noble/hashes/sha3.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js'
 
 /** Bump when matching rules or the adjudication prompt change: memberships are redone. */
-export const MERGE_VERSION = 'merge-4' // 2: same subject + same overall verdict; 3: match every member; 4: consolidate bridged markets
+export const MERGE_VERSION = 'merge-5' // 2: same subject + same overall verdict; 3: match every member; 4: consolidate bridged markets; 5: same claim, Claude decides every join
 
 /**
- * At or above: the same market, as far as similarity goes. 0.82, the classifier's measured
- * value ([0.80, 0.85) was "overwhelmingly genuine duplicates" over 208 pooled questions); the
- * mini-app still uses 0.85 and should be aligned.
+ * Similarity only shortlists: below AMBIGUOUS_THRESHOLD a question founds its own market without
+ * asking; at or above it, Claude decides against the market's canonical question in every band.
+ * MATCH_THRESHOLD now only labels a membership ('join' vs 'adjudicated').
+ *
+ * Until merge-5, a question at or above 0.82 joined on similarity alone (Claude judged only its
+ * polarity), and similarity was the best over the title AND every member. Measured Nov 15, 2026:
+ * 7 of 21 such joins came in through a member, 2 of them under 0.70 from the title ("Is
+ * Farcaster more enjoyable lately?" into "Is alt-client Farcaster a nice diversion?", 0.68).
  */
 export const MATCH_THRESHOLD = 0.82
-/** Below: a different market. Between this and MATCH_THRESHOLD, Claude decides. */
 export const AMBIGUOUS_THRESHOLD = 0.70
 
 /** keccak256 of the question's UTF-8 bytes, 0x-hex: Solidity's keccak256(bytes(question)). */
@@ -42,8 +46,8 @@ export const cosine = (a: Float32Array, b: Float32Array): number => {
 /**
  * A market as matching sees it: its canonical question, and the embeddings of that question
  * and of every member's own question. A new question is compared with all of them, so the
- * market is found through whichever cast is closest; but Claude always judges it against the
- * canonical question, so membership can't drift along a chain of near neighbours.
+ * market is found through whichever cast is closest; but Claude decides membership against the
+ * canonical question, always, so membership can't drift along a chain of near neighbours.
  */
 export type MarketRef = { id: string; question: string; embeddings: Float32Array[] }
 
@@ -56,8 +60,8 @@ export type MarketRef = { id: string; question: string; embeddings: Float32Array
  */
 export type MatchPlan =
   | { kind: 'identical'; market: MarketRef; bridges: MarketRef[] }
-  | { kind: 'join'; market: MarketRef; similarity: number; bridges: MarketRef[] } // join; Claude checks polarity only
-  | { kind: 'ambiguous'; market: MarketRef; similarity: number; bridges: MarketRef[] } // Claude decides both
+  | { kind: 'join'; market: MarketRef; similarity: number; bridges: MarketRef[] } // close; Claude decides membership and polarity
+  | { kind: 'ambiguous'; market: MarketRef; similarity: number; bridges: MarketRef[] } // nearer the floor; Claude decides both
   | { kind: 'new'; best: number }
 
 /**
