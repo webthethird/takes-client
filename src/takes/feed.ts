@@ -156,11 +156,12 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
    * keep members whose cast was later deleted, so when every other cast was tried here (no more
    * than MARKET_INLINE), the count is of the casts that loaded, the card's own included; a
    * market left with no other live cast is no market on the card. (Seen live: an author deleted
-   * a cast and posted it again, leaving a "2 takes" market of one live cast.)
+   * a cast and posted it again, leaving a "2 takes" market of one live cast.) Scoring leaves
+   * removed casts out too and sets no market_id then: the card follows that, as the filter does.
    */
-  const marketOf = (hash: string, own: 'yes' | 'no') => {
+  const marketOf = (hash: string, own: 'yes' | 'no', scoredMarket: string | null) => {
     const m = markets.get(hash)
-    if (!m) return null
+    if (!m || scoredMarket === null) return null
     const shown = others.get(hash) ?? []
     if (m.takes - 1 > MARKET_INLINE) {
       return { id: m.marketId, takes: m.takes, ...tallyOn(m.storedYes, m.takes, isFlipped(m.stored, m.own)), others: shown }
@@ -186,7 +187,7 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       band: row.band,
       following: row.following,
       resurfaced,
-      market: marketOf(row.hash, row.author_stance),
+      market: marketOf(row.hash, row.author_stance, row.market_id),
     }))
   return json({ items, next: exhausted ? null : encodeCursor(next), viewerFid: cfg.viewerFid })
 }

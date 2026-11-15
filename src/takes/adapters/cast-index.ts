@@ -74,6 +74,21 @@ export class CastIndex {
     return out
   }
 
+  /**
+   * Which of these casts the index knows to be removed: deleted (state 1) or taken down (2).
+   * A cast the index never held (an archived one, say) is not reported: unknown, not removed.
+   */
+  async removed(hashes: readonly string[]): Promise<Set<string>> {
+    const out = new Set<string>()
+    for (let i = 0; i < hashes.length; i += 400) {
+      const { results } = await this.db.prepare(
+        'SELECT hash FROM casts WHERE state != 0 AND hash IN (SELECT value FROM json_each(?1))',
+      ).bind(JSON.stringify(hashes.slice(i, i + 400))).all<{ hash: string }>()
+      for (const r of results) out.add(r.hash)
+    }
+    return out
+  }
+
   /** A root's thread, breadth by depth, oldest first, bounded in depth and size. */
   async thread(rootHash: string, maxDepth: number, limit: number): Promise<IndexedCast[]> {
     const { results } = await this.db.prepare(

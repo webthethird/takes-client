@@ -186,7 +186,9 @@ export const runScoringPass = async (
 
     /* 3. Stage 2: fresh roots, and older ones good enough to resurface. Best band first. */
     const opinions = await store.opinionRoots(oldSince)
-    const markets = await store.marketContexts(opinions.map(r => r.hash))
+    // A market's deleted or taken-down casts are left out of its counts.
+    const removed = await index.removed(await store.marketMemberHashes(opinions.map(r => r.hash)))
+    const markets = await store.marketContexts(opinions.map(r => r.hash), removed)
     // Scored: fresh casts, older ones that resurface in the main feed, and every cast in a
     // multi-cast market, whatever its band, so the "Shared questions" filter shows them all.
     const roots = opinions
@@ -275,7 +277,11 @@ export const runScoringPass = async (
     await store.putScores(live.map(root => ({
       root, score: scoreCard(root, root.claim, stances.get(root.hash) ?? [], markets.get(root.hash) ?? NO_MARKET),
     })), now)
-    await store.dropScores(gone)
+    // Also dropped: cards no longer eligible, such as an older cast whose market lost its other
+    // take, so a stale row can't keep it in the feed or the "Shared questions" filter.
+    const chosen = new Set(roots.map(r => r.hash))
+    const ineligible = opinions.filter(r => !chosen.has(r.hash)).map(r => r.hash)
+    await store.dropScores([...gone, ...ineligible])
     report.scored = live.length
     report.dropped = gone.length + (await store.pruneStaleScores())
     // Past the lookback nothing reads an archived cast; pruned on the slow cadence.

@@ -211,23 +211,44 @@ export class TakesStore {
     return out
   }
 
+  /** Every member of the markets these casts are in, the casts themselves included. */
+  async marketMemberHashes(hashes: readonly string[]): Promise<string[]> {
+    const out = new Set<string>()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        `SELECT x.cast_hash AS hash FROM market_members x
+          WHERE x.market_id IN (SELECT market_id FROM market_members WHERE cast_hash IN (SELECT value FROM json_each(?1)))`,
+      ).bind(JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string }>()
+      for (const r of results) out.add(r.hash)
+    }
+    return [...out]
+  }
+
   /**
    * Each cast's market as scoring sees it: the market's size, the distinct authors of its OTHER
    * casts, and whether its casts take both sides (stored answers are all on the canonical
    * question, so two distinct values means two sides). Casts in no market are absent.
+   *
+   * Members in `removed` (deleted or taken down) count for nothing: markets keep such members,
+   * and counting them showed an author's deleted-and-reposted cast as "2 takes" on one claim.
    */
-  async marketContexts(hashes: readonly string[]): Promise<Map<string, { id: string; takes: number; otherAuthors: number; bothSides: boolean }>> {
+  async marketContexts(hashes: readonly string[], removed: ReadonlySet<string> = new Set()):
+    Promise<Map<string, { id: string; takes: number; otherAuthors: number; bothSides: boolean }>> {
     const out = new Map<string, { id: string; takes: number; otherAuthors: number; bothSides: boolean }>()
+    const gone = JSON.stringify([...removed])
     for (let i = 0; i < hashes.length; i += CHUNK) {
       const { results } = await this.db.prepare(
         `SELECT me.cast_hash AS hash, me.market_id,
-                (SELECT count(*) FROM market_members x WHERE x.market_id = me.market_id) AS takes,
+                (SELECT count(*) FROM market_members x WHERE x.market_id = me.market_id
+                  AND x.cast_hash NOT IN (SELECT value FROM json_each(?2))) AS takes,
                 (SELECT count(DISTINCT k.fid) FROM market_members x JOIN classifications k ON k.hash = x.cast_hash
-                  WHERE x.market_id = me.market_id AND k.fid != mine.fid) AS other_authors,
-                (SELECT count(DISTINCT x.answer) FROM market_members x WHERE x.market_id = me.market_id) AS sides
+                  WHERE x.market_id = me.market_id AND k.fid != mine.fid
+                    AND x.cast_hash NOT IN (SELECT value FROM json_each(?2))) AS other_authors,
+                (SELECT count(DISTINCT x.answer) FROM market_members x WHERE x.market_id = me.market_id
+                  AND x.cast_hash NOT IN (SELECT value FROM json_each(?2))) AS sides
            FROM market_members me JOIN classifications mine ON mine.hash = me.cast_hash
           WHERE me.cast_hash IN (SELECT value FROM json_each(?1))`,
-      ).bind(JSON.stringify(hashes.slice(i, i + CHUNK))).all<{ hash: string; market_id: string; takes: number; other_authors: number; sides: number }>()
+      ).bind(JSON.stringify(hashes.slice(i, i + CHUNK)), gone).all<{ hash: string; market_id: string; takes: number; other_authors: number; sides: number }>()
       for (const r of results) out.set(r.hash, { id: r.market_id, takes: r.takes, otherAuthors: r.other_authors, bothSides: r.sides >= 2 })
     }
     return out
@@ -351,7 +372,8 @@ export class TakesStore {
 
   /** Drops cards whose root is gone from the index (deleted, or pruned past retention). */
   async dropScores(hashes: readonly string[]): Promise<void> {
-    if (hashes.length === 0) return
-    await this.db.prepare('DELETE FROM scores WHERE hash IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(hashes)).run()
+    for (let i = 0; i < hashes.length; i += CHUNK) {
+      await this.db.prepare('DELETE FROM scores WHERE hash IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(hashes.slice(i, i + CHUNK))).run()
+    }
   }
 }
