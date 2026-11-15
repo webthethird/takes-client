@@ -8,6 +8,7 @@ import { Platform, Pressable, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { apiUrl } from '../src/takes-ui/api-url.ts'
+import '../src/takes-ui/web-scrollbar.ts'
 
 const web = Platform.OS === 'web'
 
