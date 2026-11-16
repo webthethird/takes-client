@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim } from '../schema.ts'
 import {
-  CHALLENGE_BAND, FEED_START, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, mergeAll, mergeFeed, pickRebuttal, rankFeed, reconcileStance, scoreCard, toLanes, type Lanes, type ReplyStance,
+  CHALLENGE_BAND, FEED_START, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, mergeAll, mergeFeed, pickRebuttal, rankFeed, reconcileStance, scoreCard, sideReplies, toLanes, type Lanes, type ReplyStance,
 } from './score.ts'
 
 const lanes = (following: string[], others: string[]): Lanes<string> => ({ following, others })
@@ -90,7 +90,8 @@ describe('scoreCard: both sides means different people', () => {
   it('a self-reply on the other side is not a debate', () => {
     const s = scoreCard({ fid: 1 }, claim({ answer: 'no' }), [reply(1, 'yes')])
     expect(s.bothSides).toBe(false)
-    expect(s.yesAuthors).toBe(1) // the author counted on both sides, once each
+    expect(s.yesAuthors).toBe(0) // the author is never counted, on either side
+    expect(s.noAuthors).toBe(0)
   })
   it('Alice yes, Bob yes and no: Alice and Bob still disagree', () => {
     // Root (fid 1, Alice) answers yes; Bob (2) posts on both sides.
@@ -100,10 +101,37 @@ describe('scoreCard: both sides means different people', () => {
   it('counts people, not casts', () => {
     const s = scoreCard({ fid: 1 }, claim({ answer: 'no' }), [reply(2, 'yes'), reply(2, 'yes', { hash: '0xff' }), reply(3, 'off_topic')])
     expect(s.yesAuthors).toBe(1)
-    expect(s.noAuthors).toBe(1)
+    expect(s.noAuthors).toBe(0) // the author (no) isn't counted
+  })
+  it('counts backers other than the author', () => {
+    const s = scoreCard({ fid: 1 }, claim({ answer: 'yes' }), [reply(2, 'yes'), reply(3, 'no'), reply(4, 'no')])
+    expect(s.yesAuthors).toBe(1)
+    expect(s.noAuthors).toBe(2)
   })
   it('an exact band edge lands in that band, not below it', () => {
     expect(scoreCard({ fid: 1 }, claim({ challengeability: 0.7, confidence: 1 }), []).band).toBe(7)
+  })
+})
+
+describe('sideReplies', () => {
+  it('one per person, their strongest, strongest person first', () => {
+    const weak2 = reply(2, 'no', { hash: '0xa1', textLen: 10 })
+    const strong2 = reply(2, 'no', { hash: '0xa2', textLen: 200 })
+    const mid3 = reply(3, 'no', { textLen: 100 })
+    expect(sideReplies(1, 'no', [weak2, mid3, strong2])).toEqual([strong2, mid3])
+  })
+  it('never the author, never the other side or off-topic', () => {
+    expect(sideReplies(1, 'yes', [reply(1, 'yes'), reply(2, 'no'), reply(3, 'off_topic'), reply(4, 'yes')]).map(r => r.fid)).toEqual([4])
+  })
+  it('as many as the card counts on that side', () => {
+    const rs = [reply(2, 'no'), reply(2, 'no', { hash: '0xff' }), reply(3, 'no'), reply(4, 'yes'), reply(1, 'no')]
+    const s = scoreCard({ fid: 1 }, claim({ answer: 'yes' }), rs)
+    expect(sideReplies(1, 'no', rs)).toHaveLength(s.noAuthors)
+    expect(sideReplies(1, 'yes', rs)).toHaveLength(s.yesAuthors)
+  })
+  it('the rebuttal is the first challenger', () => {
+    const rs = [reply(2, 'yes', { textLen: 30 }), reply(3, 'yes', { textLen: 250 })]
+    expect(pickRebuttal(1, 'no', rs)).toBe(sideReplies(1, 'yes', rs)[0])
   })
 })
 

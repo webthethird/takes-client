@@ -162,6 +162,7 @@ export type CardScore = {
   /** Set only when the market has other casts: the feed shows one card per market. */
   marketId: string | null
   bothSides: boolean
+  /** People other than the author whose replies took each side (the author is on their own side, uncounted). */
   yesAuthors: number
   noAuthors: number
   rebuttal: ReplyStance | null
@@ -187,33 +188,47 @@ export const scoreCard = (root: { fid: number }, claim: Claim, replies: readonly
     if (bothSides) break
   }
   const people = new Set([...yes, ...no]).size
+  // The counts the card shows: other people only. The sets above keep the author, for credit.
+  const others = (side: Set<number>) => side.size - (side.has(root.fid) ? 1 : 0)
   const band = Math.floor(gatedChallenge(claim) / CHALLENGE_BAND + 1e-9)
   const credit = Math.min(MAX_CREDIT,
     (bothSides ? BOTH_SIDES_CREDIT : 0) + Math.min(PER_AUTHOR_CREDIT * (people - 1), MAX_AUTHOR_CREDIT)
     + Math.min(MARKET_TAKE_CREDIT * market.otherAuthors, MAX_MARKET_TAKE_CREDIT) + (market.bothSides ? MARKET_BOTH_SIDES_CREDIT : 0))
   return {
-    band, credit, marketTakes: market.takes, marketId: market.takes >= 2 ? market.id : null, bothSides, yesAuthors: yes.size, noAuthors: no.size,
+    band, credit, marketTakes: market.takes, marketId: market.takes >= 2 ? market.id : null, bothSides, yesAuthors: others(yes), noAuthors: others(no),
     rebuttal: pickRebuttal(root.fid, claim.answer, replies),
   }
 }
 
+/** A reply's weight as evidence: confidence, weighted by substance, saturating at ~200 characters. */
+const replyWeight = (r: ReplyStance) => r.confidence * Math.min(1, 0.4 + r.textLen / 200)
+
+/**
+ * The replies on one side of the root's question, one per person (their strongest), strongest
+ * first, never the author's own. What a card's side count counts, as casts. Ties fall to the
+ * hash, so the order is deterministic.
+ */
+export const sideReplies = (rootFid: number, side: 'yes' | 'no', replies: readonly ReplyStance[]): ReplyStance[] => {
+  const best = new Map<number, ReplyStance>()
+  const stronger = (a: ReplyStance, b: ReplyStance) => {
+    const d = replyWeight(a) - replyWeight(b)
+    return d > 1e-9 || (Math.abs(d) <= 1e-9 && a.hash < b.hash)
+  }
+  for (const r of replies) {
+    if (r.stance !== side || r.fid === rootFid) continue
+    const had = best.get(r.fid)
+    if (!had || stronger(r, had)) best.set(r.fid, r)
+  }
+  return [...best.values()].sort((a, b) => (stronger(a, b) ? -1 : stronger(b, a) ? 1 : 0))
+}
+
 /**
  * The strongest reply from someone else on the other side of the root's own answer. Shown on
- * the card as evidence, which is worth more than an AI-written challenge reason. Confidence is
- * weighted by substance, saturating at ~200 characters, so a developed counter-argument beats
- * a one-line reaction. Ties fall to the hash, so the pick is deterministic.
+ * the card as evidence, which is worth more than an AI-written challenge reason; a developed
+ * counter-argument beats a one-line reaction (replyWeight).
  */
-export const pickRebuttal = (rootFid: number, rootAnswer: 'yes' | 'no', replies: readonly ReplyStance[]): ReplyStance | null => {
-  const weight = (r: ReplyStance) => r.confidence * Math.min(1, 0.4 + r.textLen / 200)
-  let best: ReplyStance | null = null
-  for (const r of replies) {
-    if (r.stance === 'off_topic' || r.stance === rootAnswer || r.fid === rootFid) continue
-    if (!best) { best = r; continue }
-    const d = weight(r) - weight(best)
-    if (d > 1e-9 || (Math.abs(d) <= 1e-9 && r.hash < best.hash)) best = r
-  }
-  return best
-}
+export const pickRebuttal = (rootFid: number, rootAnswer: 'yes' | 'no', replies: readonly ReplyStance[]): ReplyStance | null =>
+  sideReplies(rootFid, rootAnswer === 'yes' ? 'no' : 'yes', replies)[0] ?? null
 
 /* ──────────────────────────────── Ranking ────────────────────────────── */
 

@@ -17,7 +17,7 @@ import { takesConfig, type Env } from './config.ts'
 import { isTopicId, tabsFrom } from './core/topics.ts'
 import {
   FRESH_HOURS, MARKET_RESURFACE_MIN_BAND, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
-  encodeCursor, mergeFeed, onePerMarket, rankFeed, SUGGEST_VERSION, toLanes, type FeedCursor,
+  encodeCursor, mergeFeed, onePerMarket, rankFeed, sideReplies, SUGGEST_VERSION, toLanes, type FeedCursor,
 } from './core/score.ts'
 
 type Fetch = (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>
@@ -228,6 +228,38 @@ export const takesMarket = async (req: Request, env: Env, ctx: ExecutionContext,
   }
   const items = loaded.filter(l => typeof l.cast === 'object').map(l => ({ cast: l.cast, answer: orient(l.m.stored, flipped) }))
   return json({ items })
+}
+
+/** A thread is read to MAX_REPLIES_PER_THREAD replies, so no side has more people than this. */
+const SIDE_MAX = 40
+
+/**
+ * GET /api/takes/sides?hash=<cast hash>&side=back|challenge: the replies behind a card's side
+ * count, one per person (their strongest), strongest first; the author's own never. Loaded only
+ * when a card's list is opened. A deleted reply is left out, so the list can be shorter than
+ * the count until the next scoring pass.
+ */
+export const takesSides = async (req: Request, env: Env, ctx: ExecutionContext, warp: Fetch): Promise<Response> => {
+  if (req.method !== 'GET') return json({ defined: true, code: 'NOT_FOUND', message: 'Not found' }, 404)
+  if (env.ACCESS !== 'public' && !req.headers.get('authorization')?.startsWith('Bearer ')) return unauthorized()
+  const url = new URL(req.url)
+  const hash = url.searchParams.get('hash') ?? ''
+  const side = url.searchParams.get('side') ?? ''
+  if (!/^0x[0-9a-f]{40}$/.test(hash) || (side !== 'back' && side !== 'challenge')) {
+    return json({ defined: true, code: 'BAD_INPUT', message: 'hash must be a cast hash and side back or challenge' }, 400)
+  }
+  const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
+  const card = await store.card(hash)
+  if (!card) return json({ defined: true, code: 'NOT_FOUND', message: 'that cast has no card' }, 404)
+  const answer = side === 'back' ? card.answer : card.answer === 'yes' ? 'no' : 'yes'
+  const replies = sideReplies(card.fid, answer, (await store.stances([hash])).get(hash) ?? []).slice(0, SIDE_MAX)
+  const castOf = castLoader(req, env, ctx, warp)
+  const loaded = await Promise.all(replies.map(r => castOf(r.fid, r.hash)))
+  if (loaded.includes('unauthorized')) return unauthorized()
+  if (loaded.includes('unavailable')) {
+    return json({ defined: true, code: 'RATE_LIMITED', message: 'Busy; try again in a minute', data: { retryAfter: 60 } }, 429)
+  }
+  return json({ items: loaded.filter(c => typeof c === 'object').map(cast => ({ cast })) })
 }
 
 /**

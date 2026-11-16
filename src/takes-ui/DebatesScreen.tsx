@@ -48,6 +48,17 @@ const fetchMarket = async (id: string, forHash: string): Promise<z.infer<typeof 
   if (!res.ok) throw new Error(`The other takes did not load (${res.status}).`)
   return MarketResponse.parse(await res.json())
 }
+const SidesResponse = z.object({ items: z.array(z.object({ cast: Cast })) })
+type SideName = 'back' | 'challenge'
+
+/** The replies behind one side's count: one per person, strongest first. */
+const fetchSides = async (hash: string, side: SideName): Promise<z.infer<typeof SidesResponse>> => {
+  const q = new URLSearchParams({ hash, side })
+  const res = await fetch(`${apiUrl}/api/takes/sides?${q}`, { headers: { accept: 'application/json' } })
+  if (res.status === 429) throw new Error('Busy. Try again in a minute.')
+  if (!res.ok) throw new Error(`The replies did not load (${res.status}).`)
+  return SidesResponse.parse(await res.json())
+}
 const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
 
 const Topics = z.object({ topics: z.array(z.object({ id: z.string(), name: z.string(), cards: z.number().int() })) })
@@ -79,7 +90,7 @@ const useSidePalette = (side: Side) => SIDE_PALETTES[useScheme()][side]
 const laneLabel = (i: Item) =>
   i.resurfaced ? 'Resurfaced · still unsettled' : i.following ? 'From someone you follow' : 'Across Farcaster'
 
-/** People, not casts: distinct authors whose replies took each side, relative to the cast. */
+/** People, not casts: distinct repliers on each side, relative to the cast; never the author. */
 const sideCounts = (i: Item) => ({
   backing: i.authorStance === 'yes' ? i.yesAuthors : i.noAuthors,
   challenging: i.authorStance === 'yes' ? i.noAuthors : i.yesAuthors,
@@ -282,6 +293,39 @@ const MarketTakes = ({ item, market }: { item: Item; market: NonNullable<Item['m
   )
 }
 
+/**
+ * "2 more challenges ›", "1 person backs it ›": opens the replies behind a side's count, one
+ * per person, under the card. Loaded only when opened. `skip` is a reply the card already
+ * shows (the rebuttal), left out of the list and the label.
+ */
+const SideList = ({ item, side, count, skip }: { item: Item; side: SideName; count: number; skip: string | null }) => {
+  const c = useColors()
+  const [open, setOpen] = useState(false)
+  const replies = useQuery({
+    queryKey: ['takes', 'sides', item.cast.hash, side],
+    queryFn: () => fetchSides(item.cast.hash, side),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const rest = skip ? count - 1 : count
+  if (rest <= 0) return null
+  const answer = side === 'back' ? item.authorStance : opposite(item.authorStance)
+  const label = side === 'challenge'
+    ? `${rest}${skip ? ' more' : ''} ${rest === 1 ? 'challenge' : 'challenges'}`
+    : `${rest} ${rest === 1 ? 'person backs' : 'people back'} it`
+  return (
+    <View style={{ gap: 8 }}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} hitSlop={6}
+        style={{ alignSelf: 'flex-start', paddingVertical: 4 }}>
+        <Text style={{ color: c.accent, fontSize: 14, fontWeight: '600' }}>{open ? `Hide ${side === 'challenge' ? 'challenges' : 'backers'}` : `${label} ›`}</Text>
+      </Pressable>
+      {open && (replies.isPending ? <ActivityIndicator color={c.muted} style={{ alignSelf: 'flex-start' }} />
+        : replies.isError ? <Text style={{ color: c.muted, fontSize: 13 }}>{replies.error.message}</Text>
+        : replies.data.items.filter(r => r.cast.hash !== skip).map(r => <OtherTake key={r.cast.hash} take={{ cast: r.cast, answer }} />))}
+    </View>
+  )
+}
+
 const DebateCard = ({ item }: { item: Item }) => {
   const c = useColors()
   const scheme = useScheme()
@@ -309,6 +353,8 @@ const DebateCard = ({ item }: { item: Item }) => {
         ) : (
           <SidePrompt item={item} label={!item.market} />
         )}
+        <SideList item={item} side="challenge" count={sideCounts(item).challenging} skip={item.rebuttal?.hash ?? null} />
+        <SideList item={item} side="back" count={sideCounts(item).backing} skip={null} />
         {/* A real rebuttal replaces the AI examples, but the card still invites both sides. */}
         {item.rebuttal && <SideButtons item={item} />}
       </View>

@@ -315,6 +315,12 @@ export class TakesStore {
     return out
   }
 
+  /** A scored card's author and answer, or null when the cast has no card. */
+  async card(hash: string): Promise<{ fid: number; answer: 'yes' | 'no' } | null> {
+    return await this.db.prepare('SELECT fid, author_stance AS answer FROM scores WHERE hash = ?1')
+      .bind(hash).first<{ fid: number; answer: 'yes' | 'no' }>()
+  }
+
   async putStance(s: {
     rootHash: string; replyHash: string; fid: number; stance: Stance; confidence: number; textLen: number
     corrected: boolean; detail: unknown; now: number
