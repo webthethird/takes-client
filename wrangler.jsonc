@@ -61,7 +61,7 @@
     "crons": ["* * * * *", "17 3 * * *"]
   },
   "vars": {
-    "SNAPCHAIN_URL": "https://snap.farcaster.xyz:3381",
+    "SNAPCHAIN_URL": "https://haatz.quilibrium.com",
     "CHANNEL_REGISTRY": "farcaster"
   },
   "observability": { "enabled": true }

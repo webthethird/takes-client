@@ -10,12 +10,19 @@
 // them (avatars are initials, images are links) and says how to add them later.
 //   pnpm run deploy --public             anyone may read and sign in (an open client)
 //   pnpm run deploy --private            back to private: only the listed FIDs
+//   pnpm run deploy --dry-run            print what it would create and set; changes nothing
+//
+// Takes:
+//   --viewer-fid 1234     whose follows boost the feed (VIEWER_FID)
+//   --max-calls 40        most Claude calls per scoring pass, one pass a minute (TAKES_MAX_CALLS)
+// ANTHROPIC_API_KEY and OPENAI_API_KEY are read from .env.deploy only (never from the shell) and
+// set on the Worker when present there. Without ANTHROPIC_API_KEY, scoring is off.
 //
 // Needs .env.deploy, next to this app's package.json, with CLOUDFLARE_API_TOKEN and
 // CLOUDFLARE_ACCOUNT_ID.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -29,6 +36,8 @@ const say = m => console.log(m)
 const step = m => console.log(`\n▸ ${m}`)
 /** Stops the deploy with a message; the temporary secrets folder is still removed. */
 class Stop extends Error {}
+/** Ends a dry run after its report; like Stop, it still removes the temporary folder. */
+class DryRunDone extends Error {}
 const fail = m => {
   throw new Stop(m)
 }
@@ -47,6 +56,9 @@ const open = flag('public')
 const close = flag('private')
 let fids = option('fid')
 const backfillHours = option('backfill-hours') ?? '2'
+const dry = flag('dry-run')
+const viewerFid = option('viewer-fid')
+const maxCalls = option('max-calls')
 const early = m => {
   console.error(`\n✘ ${m}`)
   process.exit(1)
@@ -54,14 +66,24 @@ const early = m => {
 if (fids !== undefined && !/^[0-9]{1,12}(,[0-9]{1,12})*$/.test(fids.replace(/\s/g, ''))) early('--fid takes FIDs separated by commas, e.g. --fid 1234 or --fid 1234,42')
 fids = fids?.replace(/\s/g, '')
 if (open && close) early('--public and --private: pick one')
+if (viewerFid !== undefined && !/^[0-9]{1,12}$/.test(viewerFid)) early('--viewer-fid takes one FID, e.g. --viewer-fid 1234')
+if (maxCalls !== undefined && !/^[0-9]{1,5}$/.test(maxCalls)) early('--max-calls takes a whole number, e.g. --max-calls 40')
+/** In a dry run: what this step would do, instead of doing it. */
+const would = m => say(`  would ${m}`)
 
 // Credentials: from .env.deploy, never printed.
 
 const envFile = join(APP, '.env.deploy')
+/** Takes' API keys: taken from .env.deploy only, so a key in the shell is never uploaded by accident. */
+const TAKES_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+const takesKeys = {}
 if (existsSync(envFile)) {
   for (const line of readFileSync(envFile, 'utf8').split('\n')) {
     const m = /^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/.exec(line)
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2]
+    if (!m) continue
+    if (TAKES_KEYS.includes(m[1])) {
+      if (m[2]) takesKeys[m[1]] = m[2]
+    } else if (!process.env[m[1]]) process.env[m[1]] = m[2]
   }
 }
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN
@@ -150,6 +172,20 @@ const secretsFile = (name, values) => {
   return file
 }
 
+/**
+ * A database's migrations not yet applied, for the dry run. Reads the table wrangler keeps
+ * (d1_migrations) with a plain SELECT: `wrangler d1 migrations list` would create that table.
+ */
+const pendingMigrations = async d => {
+  const local = readdirSync(join(APP, d.migrations_dir)).filter(f => f.endsWith('.sql')).sort()
+  if (!d.database_id) return local
+  const r = await cf(`/d1/database/${d.database_id}/query`, { method: 'POST', body: JSON.stringify({ sql: `SELECT name FROM ${d.migrations_table ?? 'd1_migrations'}` }) })
+  if (!r.ok && /no such table/i.test(JSON.stringify(r.body.errors))) return local
+  if (!r.ok) fail(`Couldn't read the migrations of ${d.database_name}: ${JSON.stringify(r.body.errors ?? r.body).slice(0, 200)}`)
+  const applied = new Set((r.body.result?.[0]?.results ?? []).map(x => x.name))
+  return local.filter(f => !applied.has(f))
+}
+
 const ask = async question => {
   if (!process.stdin.isTTY) return null
   const rl = createInterface({ input: process.stdin, output: process.stdout })
@@ -183,7 +219,10 @@ try {
   if (close && !fids && !apiSecrets.has('ALLOWED_FIDS') && !apiSecrets.has('APP_FID')) {
     fail('Going private needs the FIDs who may use it: run again with --private --fid <your FID>.')
   }
-  if (!open && !fids && !decided) {
+  if (dry && !open && !fids && !decided) {
+    step('Who may use this deployment?')
+    would('ask for the FIDs who may use it (pass --fid, or --public)')
+  } else if (!open && !fids && !decided) {
     step('Who may use this deployment?')
     say('  It is private: only the Farcaster accounts you list can sign in and read.')
     const answer = await ask('  Your FID (more than one: separate with commas): ')
@@ -196,29 +235,45 @@ try {
   // The web app is built before anything on the account changes, so a failed build leaves the
   // deployment as it was.
   step('Building the app')
-  const exp = spawnSync('pnpm', ['exec', 'expo', 'export', '-p', 'web', '--output-dir', 'dist'], { cwd: APP, env: process.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (dry) would('build the web app (expo export)')
+  const exp = dry ? { status: 0 } : spawnSync('pnpm', ['exec', 'expo', 'export', '-p', 'web', '--output-dir', 'dist'], { cwd: APP, env: process.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   if (exp.status !== 0) fail(`expo export failed:\n${exp.stderr.split('\n').slice(-12).join('\n')}`)
-  say('  Built')
+  if (!dry) say('  Built')
 
-  // 3. The database.
-  step('Database (D1)')
-  const dbName = apiConfig.d1_databases[0].database_name
-  let db = (wranglerJson(['d1', 'list', '--json']) ?? []).find(d => d.name === dbName)
-  if (!db) {
-    wrangler(['d1', 'create', dbName])
-    db = (wranglerJson(['d1', 'list', '--json']) ?? []).find(d => d.name === dbName)
-    if (!db) fail(`Created ${dbName} but can't find it in the list`)
-    say(`  Created ${dbName}`)
-  } else {
-    say(`  Using ${dbName}`)
+  // 3. The databases: every one in wrangler.jsonc (Warpstack's index, DB, and Takes' scores,
+  // TAKES) is created if missing and migrated, and the generated config keeps all of them.
+  step('Databases (D1)')
+  const listed = wranglerJson(['d1', 'list', '--json'])
+  if (!Array.isArray(listed)) fail("Couldn't list your D1 databases, so nothing was changed. Run this again in a minute.")
+  const databases = []
+  for (const d of apiConfig.d1_databases) {
+    let found = listed.find(x => x.name === d.database_name)
+    if (!found && dry) {
+      would(`create D1 database ${d.database_name} (binding ${d.binding})`)
+    } else if (!found) {
+      wrangler(['d1', 'create', d.database_name])
+      found = (wranglerJson(['d1', 'list', '--json']) ?? []).find(x => x.name === d.database_name)
+      if (!found) fail(`Created ${d.database_name} but can't find it in the list`)
+      say(`  Created ${d.database_name} (${d.binding})`)
+    } else {
+      say(`  Using ${d.database_name} (${d.binding})`)
+    }
+    databases.push({ ...d, database_id: found?.uuid ?? null })
   }
   // The account's IDs go into a generated config that git ignores, never into wrangler.jsonc.
-  const deployConfig = { ...apiConfig, d1_databases: [{ ...apiConfig.d1_databases[0], database_id: db.uuid }] }
+  const deployConfig = { ...apiConfig, d1_databases: databases }
   const writeDeployConfig = () => writeFileSync(join(APP, DEPLOY_CONFIG),
     `// Generated by scripts/deploy.mjs from wrangler.jsonc and your account; edit wrangler.jsonc instead.\n${JSON.stringify(deployConfig, null, 2)}\n`)
-  writeDeployConfig()
-  wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', DEPLOY_CONFIG])
-  say('  Migrations applied')
+  if (!dry) writeDeployConfig()
+  for (const d of databases) {
+    if (dry) {
+      const pending = await pendingMigrations(d)
+      would(pending.length ? `apply ${pending.length} migration(s) to ${d.database_name}: ${pending.join(', ')}` : `apply nothing to ${d.database_name}: its migrations are up to date`)
+      continue
+    }
+    wrangler(['d1', 'migrations', 'apply', d.binding, '--remote', '--config', DEPLOY_CONFIG])
+    say(`  ${d.database_name}: migrations applied`)
+  }
 
   // 4. Images: the bucket and the media Worker.
   let mediaKey = null
@@ -245,8 +300,9 @@ try {
     if (code === 10042) {
       off("R2 isn't enabled on this Cloudflare account.")
     } else if (got.status === 404 || code === 10006) {
-      const made = await cf('/r2/buckets', { method: 'POST', body: JSON.stringify({ name: bucket }) })
-      if (made.ok) say(`  Created bucket ${bucket}`)
+      const made = dry ? { ok: true } : await cf('/r2/buckets', { method: 'POST', body: JSON.stringify({ name: bucket }) })
+      if (dry) would(`create R2 bucket ${bucket}`)
+      else if (made.ok) say(`  Created bucket ${bucket}`)
       else off(`couldn't create the R2 bucket (${JSON.stringify(made.body.errors).slice(0, 200)}).`)
     } else if (got.status === 0 || got.status >= 500) {
       off(`Cloudflare didn't answer about the R2 bucket (${JSON.stringify(got.body.errors).slice(0, 200)}).`)
@@ -264,13 +320,18 @@ try {
       mediaValues.MEDIA_KEY = mediaKey
     }
     if (open) mediaValues.ACCESS = 'public'
-    if (close && mediaSecrets.has('ACCESS') && !(await deleteSecret(mediaConfig.name, 'ACCESS'))) {
-      fail(`Couldn't remove ACCESS from ${mediaConfig.name}; it is still public. Run this again.`)
+    if (dry) {
+      if (close && mediaSecrets.has('ACCESS')) would(`remove ACCESS from ${mediaConfig.name}`)
+      would(`deploy the media Worker ${mediaConfig.name}${Object.keys(mediaValues).length ? `, setting ${Object.keys(mediaValues).join(', ')}` : ''}`)
+    } else {
+      if (close && mediaSecrets.has('ACCESS') && !(await deleteSecret(mediaConfig.name, 'ACCESS'))) {
+        fail(`Couldn't remove ACCESS from ${mediaConfig.name}; it is still public. Run this again.`)
+      }
+      const argv = ['deploy', '--config', 'wrangler.media.jsonc']
+      if (Object.keys(mediaValues).length) argv.push('--secrets-file', secretsFile('media', mediaValues))
+      wrangler(argv)
+      say(`  Deployed ${mediaOrigin}`)
     }
-    const argv = ['deploy', '--config', 'wrangler.media.jsonc']
-    if (Object.keys(mediaValues).length) argv.push('--secrets-file', secretsFile('media', mediaValues))
-    wrangler(argv)
-    say(`  Deployed ${mediaOrigin}`)
   }
 
   // 5. The API's settings. Keys are made once and never rotated here: a new SESSION_MAC_KEY
@@ -282,28 +343,55 @@ try {
   if (firstDeploy) values.INGEST_BACKFILL_HOURS = backfillHours
   if (fids) values.ALLOWED_FIDS = fids
   if (open) values.ACCESS = 'public'
-  if (close && apiSecrets.has('ACCESS')) {
+  if (close && apiSecrets.has('ACCESS') && dry) would(`remove ACCESS from ${apiConfig.name}: private again`)
+  else if (close && apiSecrets.has('ACCESS')) {
     if (!(await deleteSecret(apiConfig.name, 'ACCESS'))) fail(`Couldn't remove ACCESS from ${apiConfig.name}; it is still public. Run this again.`)
     say('  Removed ACCESS: private again')
   }
   if (media) values.MEDIA_ORIGIN = mediaOrigin
   // Images off on a deployment that had them: without MEDIA_ORIGIN the API stores and names none.
-  if (!media && apiSecrets.has('MEDIA_ORIGIN')) {
+  if (!media && apiSecrets.has('MEDIA_ORIGIN') && dry) would('remove MEDIA_ORIGIN: images off')
+  else if (!media && apiSecrets.has('MEDIA_ORIGIN')) {
     say((await deleteSecret(apiConfig.name, 'MEDIA_ORIGIN')) ? '  Removed MEDIA_ORIGIN: images are off' : '  Could not remove MEDIA_ORIGIN; images stay on until it is removed')
   }
   if (mediaKey) values.MEDIA_KEY = mediaKey
-  say(`  Setting ${Object.keys(values).join(', ')} (values not shown)`)
+  say(`  ${dry ? 'Would set' : 'Setting'} ${Object.keys(values).join(', ')} (values not shown)`)
+
+  // Takes' settings. The keys are what spend money: with ANTHROPIC_API_KEY set, the scoring pass
+  // calls Claude every minute, up to TAKES_MAX_CALLS times.
+  step('Takes')
+  for (const k of TAKES_KEYS) if (takesKeys[k]) values[k] = takesKeys[k]
+  if (viewerFid) values.VIEWER_FID = viewerFid
+  if (maxCalls) values.TAKES_MAX_CALLS = maxCalls
+  const state = (name, offMeans) => values[name] !== undefined
+    ? `${dry ? 'would set' : 'setting'}${TAKES_KEYS.includes(name) ? ' from .env.deploy' : ` to ${values[name]}`}`
+    : apiSecrets.has(name) ? 'already set, unchanged' : `not set: ${offMeans}`
+  say(`  ANTHROPIC_API_KEY: ${state('ANTHROPIC_API_KEY', 'scoring is off and the feed stays empty')}`)
+  say(`  OPENAI_API_KEY:    ${state('OPENAI_API_KEY', 'merging casts into markets is off')}`)
+  say(`  VIEWER_FID:        ${state('VIEWER_FID', 'no following lane or credit')}`)
+  say(`  TAKES_MAX_CALLS:   ${state('TAKES_MAX_CALLS', 'the default, 40 Claude calls per pass')}`)
+  say(`  Reads casts from ${apiConfig.vars?.SNAPCHAIN_URL ?? '(SNAPCHAIN_URL unset)'} (wrangler.jsonc vars)`)
+  say('  Cron: a scoring pass every minute, and a daily job at 03:17 UTC')
 
   // 6. Build and deploy.
   step('Deploying the API')
-  const headers = spawnSync('node', ['scripts/web-headers.mjs'], { cwd: APP, env: { ...process.env, MEDIA_ORIGIN: media ? mediaOrigin : '' }, encoding: 'utf8' })
+  // Rewrites dist/_headers, so a dry run skips it.
+  const headers = dry ? { status: 0 } : spawnSync('node', ['scripts/web-headers.mjs'], { cwd: APP, env: { ...process.env, MEDIA_ORIGIN: media ? mediaOrigin : '' }, encoding: 'utf8' })
   if (headers.status !== 0) fail(headers.stderr)
   // Without images, the API deploys without the R2 and Images bindings: an account without R2
   // can't bind a bucket, and the API then stores and names no images at all.
   if (!media) {
     delete deployConfig.r2_buckets
     delete deployConfig.images
-    writeDeployConfig()
+    if (!dry) writeDeployConfig()
+  }
+  if (dry) {
+    would(`deploy the API Worker ${apiConfig.name} (the web app, D1 ${databases.map(d => d.binding).join(' and ')}, Durable Objects, crons${media ? ', R2 and Images' : ''})`)
+    step('Dry run: nothing on your account was changed')
+    const isPublic = open || (!close && apiSecrets.has('ACCESS'))
+    say(`  App would be at ${apiOrigin}, ${isPublic ? 'public (anyone with the link)' : 'private'}`)
+    if (!isPublic) say("  The web can't sign in yet (Warpstack: the web is read-only), so browsers get no feed while it's private. To share a link, use --public.")
+    throw new DryRunDone()
   }
   wrangler(['deploy', '--config', DEPLOY_CONFIG, '--secrets-file', secretsFile('api', values)])
   say(`  Deployed ${apiOrigin}`)
@@ -335,9 +423,12 @@ try {
   const cd = here('.') === '.' ? '' : `cd ${here('.')} && `
   say(`\n  Point the phone app at it and build it:\n    ${cd}EXPO_PUBLIC_API_URL=${apiOrigin} pnpm run ios:release`)
 } catch (e) {
-  if (!(e instanceof Stop)) throw e
-  console.error(`\n✘ ${e.message}`)
-  process.exitCode = 1
+  if (e instanceof DryRunDone) process.exitCode = 0
+  else if (!(e instanceof Stop)) throw e
+  else {
+    console.error(`\n✘ ${e.message}`)
+    process.exitCode = 1
+  }
 } finally {
   rmSync(tmp, { recursive: true, force: true })
 }
