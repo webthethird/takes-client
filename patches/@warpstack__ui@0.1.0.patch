@@ -55,7 +55,7 @@ index f0a0a420fd4e450425236713ce4b5dc83f723fb7..7dc98571cbcfc4aab4ee649b7c6fa490
  export declare const Message: ({ children, tone }: {
      children: ReactNode;
 diff --git a/dist/slots.js b/dist/slots.js
-index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..5d08e518471380640b147630448626bffbd9cf2d 100644
+index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..2c1c1779a3ba8b7832253e3763efc00ebf870298 100644
 --- a/dist/slots.js
 +++ b/dist/slots.js
 @@ -80,12 +80,22 @@ const shownText = (cast) => {
@@ -84,7 +84,24 @@ index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..5d08e518471380640b147630448626bf
              switch (s.kind) {
                  case 'text': return _jsx(Text, { children: s.text }, i);
                  case 'mention': return (_jsxs(Link, { href: routes.profile(s.fid), style: { color: c.accent }, children: ["@", s.username ?? `fid:${s.fid}`] }, i));
-@@ -183,7 +193,7 @@ const count = (n, exact) => (n === 0 ? '' : `${n.toLocaleString()}${exact ? '' :
+@@ -96,7 +106,15 @@ export const CastText = ({ cast, large }) => {
+ };
+ const QuoteCard = ({ cast }) => {
+     const c = useColors();
+-    return (_jsx(Link, { href: routes.thread(cast), asChild: true, children: _jsx(Pressable, { accessibilityRole: "link", children: ({ pressed }) => (_jsxs(View, { style: [styles.quote, { borderColor: c.border }, pressed && { backgroundColor: c.pressed }], children: [_jsxs(View, { style: styles.row, children: [_jsx(Avatar, { user: cast.author, size: 20 }), _jsx(Text, { style: [type.small, { color: c.text, fontWeight: '600', flexShrink: 1 }], numberOfLines: 1, children: nameOf(cast.author) }), cast.author.username && _jsxs(Text, { style: [type.small, { color: c.muted, flexShrink: 1 }], numberOfLines: 1, children: ["@", cast.author.username] })] }), _jsx(Text, { style: [type.small, { color: c.text, fontSize: 14, lineHeight: 20 }], numberOfLines: 5, children: cast.text })] })) }) }));
++    return (_jsx(Link, { href: routes.thread(cast), asChild: true, children: _jsx(Pressable, { accessibilityRole: "link", children: ({ pressed }) => (_jsxs(View, { style: [styles.quote, { borderColor: c.border }, pressed && { backgroundColor: c.pressed }], children: [_jsxs(View, { style: styles.row, children: [_jsx(Avatar, { user: cast.author, size: 20 }), _jsx(Text, { style: [type.small, { color: c.text, fontWeight: '600', flexShrink: 1 }], numberOfLines: 1, children: nameOf(cast.author) }), cast.author.username && _jsxs(Text, { style: [type.small, { color: c.muted, flexShrink: 1 }], numberOfLines: 1, children: ["@", cast.author.username] })] }), _jsx(Text, { style: [type.small, { color: c.text, fontSize: 14, lineHeight: 20 }], numberOfLines: 5, children: castSegments(cast).map((s, i) => {
++                            // Takes patch: mentions, channels and links as text (see src/slots.tsx).
++                            switch (s.kind) {
++                                case 'text': return _jsx(Text, { children: s.text }, i);
++                                case 'mention': return _jsxs(Text, { style: { color: c.accent }, children: ["@", s.username ?? `fid:${s.fid}`] }, i);
++                                case 'channel': return _jsxs(Text, { style: { color: c.accent }, children: ["/", s.key] }, i);
++                                case 'link': return _jsx(Text, { style: { color: c.accent }, children: s.text }, i);
++                            }
++                        }) })] })) }) }));
+ };
+ /** A link the server hasn't described (yet, or ever): a chip the reader chooses to open. */
+ const LinkChip = ({ url, label }) => {
+@@ -183,7 +201,7 @@ const count = (n, exact) => (n === 0 ? '' : `${n.toLocaleString()}${exact ? '' :
  // The Farcaster client's action colors: green for your recast, crimson for your like.
  const RECASTED = '#14ae5c';
  /** A cast. Tapping it opens its thread; its timestamp is a real link, for keyboards and new tabs. */
@@ -93,7 +110,7 @@ index e65e96c709f90ff0ed0873dbaf520b1dc1cc4adc..5d08e518471380640b147630448626bf
      const c = useColors();
      const router = useRouter();
      const open = () => {
-@@ -201,7 +211,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }) => {
+@@ -201,7 +219,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }) => {
      return (_jsxs(Pressable, { onPress: open, disabled: root, accessible: false, style: ({ pressed }) => [styles.cast, { borderBottomColor: c.border, borderBottomWidth: emphasis === 'ancestor' ? 0 : StyleSheet.hairlineWidth },
              emphasis === 'ancestor' && { paddingBottom: 0 }, pressed && !root && { backgroundColor: c.pressed }], children: [_jsxs(View, { style: { alignItems: 'center' }, children: [_jsx(Link, { href: routes.profile(cast.fid), asChild: true, children: _jsx(Pressable, { accessibilityRole: "link", accessibilityLabel: `${nameOf(cast.author)}'s profile`, children: _jsx(Avatar, { user: cast.author, size: AVATAR }) }) }), emphasis === 'ancestor' && _jsx(View, { style: [styles.rail, { backgroundColor: c.border }] })] }), _jsxs(View, { style: { flex: 1, minWidth: 0, paddingBottom: emphasis === 'ancestor' ? space.md : 0 }, children: [parent && emphasis !== 'ancestor' && !(parent.kind === 'cast' && parent.ref.hash === threadRoot) && (_jsx(Text, { style: [type.small, { color: c.muted, marginBottom: space.xxs }], numberOfLines: 1, children: parent.kind === 'cast'
                              ? _jsxs(_Fragment, { children: ["Replying to ", _jsx(Link, { href: routes.thread(parent.ref), style: { color: c.accent }, children: "a cast" })] })
@@ -145,7 +162,7 @@ index ef8e27fec4b16e71602422f7b3b07d21aa82c013..fda9b71aa4f61d2af7a83bb35c3f69b1
 -export { BottomInset, HIT, HUES, radius, space, type, useBottomInset, useColors } from './theme.ts'
 +export { BottomInset, ColorsOverride, HIT, HUES, radius, space, type, useBottomInset, useColors } from './theme.ts'
 diff --git a/src/slots.tsx b/src/slots.tsx
-index c4aa719560c295f7ade92ad72dff6945a3216bee..bfc3608520b877a6c2cd84cda9128e2cb07600de 100644
+index c4aa719560c295f7ade92ad72dff6945a3216bee..ce74d30f13afe2c75cc98641d0627064aed4718a 100644
 --- a/src/slots.tsx
 +++ b/src/slots.tsx
 @@ -92,12 +92,16 @@ const shownText = (cast: Cast): Pick<Cast, 'text' | 'mentions'> => {
@@ -186,7 +203,27 @@ index c4aa719560c295f7ade92ad72dff6945a3216bee..bfc3608520b877a6c2cd84cda9128e2c
  }
  
  const QuoteCard = ({ cast }: { cast: QuotedCast }) => {
-@@ -274,7 +288,7 @@ type ActionIcon = (p: { color: string }) => ReactNode
+@@ -125,7 +139,18 @@ const QuoteCard = ({ cast }: { cast: QuotedCast }) => {
+               <Text style={[type.small, { color: c.text, fontWeight: '600', flexShrink: 1 }]} numberOfLines={1}>{nameOf(cast.author)}</Text>
+               {cast.author.username && <Text style={[type.small, { color: c.muted, flexShrink: 1 }]} numberOfLines={1}>@{cast.author.username}</Text>}
+             </View>
+-            <Text style={[type.small, { color: c.text, fontSize: 14, lineHeight: 20 }]} numberOfLines={5}>{cast.text}</Text>
++            {/* Takes patch: mentions, channels and links as text, not raw bytes dropped. Not links:
++                the whole quote is one link, and a link inside a link is invalid on the web. */}
++            <Text style={[type.small, { color: c.text, fontSize: 14, lineHeight: 20 }]} numberOfLines={5}>
++              {castSegments(cast).map((s, i) => {
++                switch (s.kind) {
++                  case 'text': return <Text key={i}>{s.text}</Text>
++                  case 'mention': return <Text key={i} style={{ color: c.accent }}>@{s.username ?? `fid:${s.fid}`}</Text>
++                  case 'channel': return <Text key={i} style={{ color: c.accent }}>/{s.key}</Text>
++                  case 'link': return <Text key={i} style={{ color: c.accent }}>{s.text}</Text>
++                }
++              })}
++            </Text>
+           </View>
+         )}
+       </Pressable>
+@@ -274,7 +299,7 @@ type ActionIcon = (p: { color: string }) => ReactNode
  export type Emphasis = 'root' | 'ancestor' | 'default'
  
  /** A cast. Tapping it opens its thread; its timestamp is a real link, for keyboards and new tabs. */
@@ -195,7 +232,7 @@ index c4aa719560c295f7ade92ad72dff6945a3216bee..bfc3608520b877a6c2cd84cda9128e2c
    const c = useColors()
    const router = useRouter()
    const open = () => {
-@@ -318,7 +332,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }: { cast: Cas
+@@ -318,7 +343,7 @@ export const CastCard = ({ cast, emphasis = 'default', threadRoot }: { cast: Cas
              {relativeTime(cast.ts, now())}
            </Link>
          </View>

@@ -9,7 +9,7 @@ overrides:
   undici: 7.30.1
 
 patchedDependencies:
-  '@warpstack/ui@0.1.0': ccdc02560cbc9572687b3220b0e4eb0389104e1b8435ff42cac011191e5bc8f3
+  '@warpstack/ui@0.1.0': 8178604eaffba3ab61b3b60ff0d262bd48c59bbcb3c6c41cdcf9ce02f0ddccec
 
 importers:
 
@@ -41,7 +41,7 @@ importers:
         version: 0.1.0
       '@warpstack/ui':
         specifier: 0.1.0
-        version: 0.1.0(patch_hash=ccdc02560cbc9572687b3220b0e4eb0389104e1b8435ff42cac011191e5bc8f3)(73e8c8f2d0161103d994f1bd13772636)
+        version: 0.1.0(patch_hash=8178604eaffba3ab61b3b60ff0d262bd48c59bbcb3c6c41cdcf9ce02f0ddccec)(73e8c8f2d0161103d994f1bd13772636)
       '@warpstack/wallet':
         specifier: 0.1.0
         version: 0.1.0
@@ -5526,7 +5526,7 @@ snapshots:
       '@noble/hashes': 2.4.0
       '@scure/bip39': 2.4.0
 
-  '@warpstack/ui@0.1.0(patch_hash=ccdc02560cbc9572687b3220b0e4eb0389104e1b8435ff42cac011191e5bc8f3)(73e8c8f2d0161103d994f1bd13772636)':
+  '@warpstack/ui@0.1.0(patch_hash=8178604eaffba3ab61b3b60ff0d262bd48c59bbcb3c6c41cdcf9ce02f0ddccec)(73e8c8f2d0161103d994f1bd13772636)':
     dependencies:
       '@warpstack/app-core': 0.1.0(@tanstack/react-query@5.105.3(@types/react@19.3.0)(react@19.3.0))(expo-file-system@58.0.9(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.13)(@react-native/metro-config@0.88.1(@babel/core@7.29.13))(@types/react@19.3.0)(react@19.3.0)))(expo-image-manipulator@58.0.14(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.13)(@react-native/metro-config@0.88.1(@babel/core@7.29.13))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(expo-image-picker@58.0.10(expo@58.0.14))(expo-secure-store@58.0.2(expo@58.0.14))(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.13)(@react-native/metro-config@0.88.1(@babel/core@7.29.13))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       '@warpstack/client': 0.1.0(@tanstack/react-query@5.105.3(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
