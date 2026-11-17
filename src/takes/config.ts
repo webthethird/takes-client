@@ -7,12 +7,14 @@ export interface Env extends WarpEnv {
   /** Unset: scoring is off and the feed is empty, with a log line saying why. */
   ANTHROPIC_API_KEY?: string
   /**
-   * Whose follow graph boosts the feed. Stands in for the session's FID until the web can
-   * sign in (Warpstack's browser client is read-only). Unset: no following lane or credit.
+   * The deployment's own viewer: always active, so its follows keep being scored. Visitors
+   * pick their own ("Viewing as", core/viewers.ts); this is not a default for them.
    */
   VIEWER_FID?: string
   /** Embeddings for merging casts into canonical markets. Unset: merging is off. */
   OPENAI_API_KEY?: string
+  /** New viewers admitted per IP: 1 a minute (core/viewers.ts). Unset: only the hourly cap applies. */
+  NEW_VIEWER_IP?: RateLimit
   /** Most Claude calls per scoring pass (one pass per minute). Default 40. */
   TAKES_MAX_CALLS?: string
 }

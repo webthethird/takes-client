@@ -15,6 +15,9 @@ import { fillPage } from './core/page.ts'
 import { isFlipped, orient, tallyOn } from './core/market.ts'
 import { takesConfig, type Env } from './config.ts'
 import { isTopicId, tabsFrom } from './core/topics.ts'
+import { parseViewerQuery } from './core/viewers.ts'
+import { readFidByName, readUsername } from './adapters/node.ts'
+import { admitViewer, type Admitted } from './viewers.ts'
 import {
   FRESH_HOURS, MARKET_RESURFACE_MIN_BAND, PROMPT_VERSION, RESURFACE_EVERY, STANCE_VERSION, RESURFACE_MAX_DAYS, RESURFACE_MIN_BAND, decodeCursor,
   encodeCursor, mergeFeed, onePerMarket, rankFeed, sideReplies, SUGGEST_VERSION, toLanes, type FeedCursor,
@@ -86,9 +89,18 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
   // starve (few follows post about any one subject). Its own cursor sequence.
   const topic = url.searchParams.get('topic') ?? undefined
   if (topic !== undefined && !isTopicId(topic)) return json({ defined: true, code: 'BAD_INPUT', message: 'topic is not one of the tabs' }, 400)
+  // fid=<n>: whose follows shape the feed ("Viewing as"). Absent: no following lane at all,
+  // rather than someone else's graph labelled as yours.
+  const fidParam = url.searchParams.get('fid')
+  if (fidParam !== null && !/^[1-9][0-9]{0,11}$/.test(fidParam)) return json({ defined: true, code: 'BAD_INPUT', message: 'fid must be a Farcaster ID' }, 400)
 
-  const cfg = takesConfig(env)
   const store = new TakesStore(env.TAKES, PROMPT_VERSION, STANCE_VERSION)
+  const viewer: Admitted | null = fidParam === null ? null : await admitViewer(Number(fidParam), {
+    store, now,
+    allowNew: async () => !env.NEW_VIEWER_IP || (await env.NEW_VIEWER_IP.limit({ key: `NEW_VIEWER_IP:${req.headers.get('cf-connecting-ip') ?? 'unknown'}` })).success,
+    usernameOf: fid => readUsername(env.SNAPCHAIN_URL, fid),
+  })
+  const graph = viewer && (viewer.status === 'ready' || viewer.status === 'personalizing') ? viewer.fid : null
   const freshSince = now - FRESH_HOURS * 3600
   const [fresh, old, follows] = await Promise.all([
     store.scores({ since: freshSince, until: now + 1, minBand: 0, topic, limit: FRESH_POOL }),
@@ -96,7 +108,7 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       since: now - RESURFACE_MAX_DAYS * 86_400, until: freshSince, minBand: RESURFACE_MIN_BAND,
       marketMinBand: MARKET_RESURFACE_MIN_BAND, topic, limit: OLD_POOL,
     }),
-    cfg.viewerFid === null ? Promise.resolve(new Set<number>()) : store.follows(cfg.viewerFid),
+    graph === null ? Promise.resolve(new Set<number>()) : store.follows(graph),
   ])
   // One card per market, led by its best-ranked cast; the card shows the others.
   const ranked = onePerMarket(rankFeed(fresh, follows), rankFeed(old, follows))
@@ -192,7 +204,10 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       resurfaced,
       market: marketOf(row.hash, row.author_stance, row.market_id),
     }))
-  return json({ items, next: exhausted ? null : encodeCursor(next), viewerFid: cfg.viewerFid })
+  return json({
+    items, next: exhausted ? null : encodeCursor(next),
+    viewer: viewer && { fid: viewer.fid, username: viewer.username, status: viewer.status },
+  })
 }
 
 /** Members returned by the market endpoint ("Show more"). */
@@ -260,6 +275,36 @@ export const takesSides = async (req: Request, env: Env, ctx: ExecutionContext, 
     return json({ defined: true, code: 'RATE_LIMITED', message: 'Busy; try again in a minute', data: { retryAfter: 60 } }, 429)
   }
   return json({ items: loaded.filter(c => typeof c === 'object').map(cast => ({ cast })) })
+}
+
+/**
+ * GET /api/takes/viewer?q=<username or FID>: who that is, for "Viewing as": { fid, username }
+ * with the account's current username. Asks the node, so it's rate-limited per IP; admitting
+ * the viewer happens on their first feed request, under the new-viewer limits.
+ */
+export const takesViewer = async (req: Request, env: Env): Promise<Response> => {
+  if (req.method !== 'GET') return json({ defined: true, code: 'NOT_FOUND', message: 'Not found' }, 404)
+  if (env.ACCESS !== 'public' && !req.headers.get('authorization')?.startsWith('Bearer ')) return unauthorized()
+  const q = parseViewerQuery(new URL(req.url).searchParams.get('q') ?? '')
+  if (!q) return json({ defined: true, code: 'BAD_INPUT', message: 'Type a Farcaster username or FID' }, 400)
+  const ip = req.headers.get('cf-connecting-ip') ?? 'unknown'
+  if (!(await env.UPSTREAM_IP.limit({ key: `TAKES_VIEWER:${ip}` })).success) {
+    return json({ defined: true, code: 'RATE_LIMITED', message: 'Too many lookups; try again in a minute', data: { retryAfter: 60 } }, 429)
+  }
+  const busy = () => json({ defined: true, code: 'UNAVAILABLE', message: "Couldn't reach Farcaster just now; try again" }, 503)
+  const notFound = () => json({ defined: true, code: 'NOT_FOUND', message: 'No Farcaster account by that name' }, 404)
+  let fid: number
+  if ('fid' in q) fid = q.fid
+  else {
+    const r = await readFidByName(env.SNAPCHAIN_URL, q.username)
+    if (!r.ok) return busy()
+    if (r.fid === null) return notFound()
+    fid = r.fid
+  }
+  const name = await readUsername(env.SNAPCHAIN_URL, fid)
+  if (!name.ok) return busy()
+  if (name.name === null) return notFound()
+  return json({ fid, username: name.name })
 }
 
 /**

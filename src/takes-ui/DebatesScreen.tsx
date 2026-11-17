@@ -9,7 +9,7 @@ import { Cast } from '@warpstack/contract'
 import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useColorScheme, View, type ScrollViewInstance } from 'react-native'
+import { ActivityIndicator, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View, type ScrollViewInstance } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { collapseFor } from './collapse.ts'
@@ -59,7 +59,42 @@ const fetchSides = async (hash: string, side: SideName): Promise<z.infer<typeof 
   if (!res.ok) throw new Error(`The replies did not load (${res.status}).`)
   return SidesResponse.parse(await res.json())
 }
-const Feed = z.object({ items: z.array(Item), next: z.string().nullable(), viewerFid: z.number().nullable() })
+const ViewerStatus = z.enum(['ready', 'personalizing', 'unknown', 'busy'])
+const Feed = z.object({
+  items: z.array(Item), next: z.string().nullable(),
+  /** Whose follows shaped this page, and how far along that is; null without a viewer. */
+  viewer: z.object({ fid: z.number(), username: z.string().nullable(), status: ViewerStatus }).nullable(),
+})
+
+/** "Viewing as": who the feed is for, remembered in this browser only (no account involved). */
+const Viewer = z.object({ fid: z.number().int().positive(), username: z.string() })
+type Viewer = z.infer<typeof Viewer>
+const VIEWER_KEY = 'takes.viewer'
+const loadViewer = (): Viewer | null => {
+  if (Platform.OS !== 'web') return null
+  try {
+    const raw = globalThis.localStorage?.getItem(VIEWER_KEY)
+    const parsed = raw ? Viewer.safeParse(JSON.parse(raw)) : null
+    return parsed?.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+const saveViewer = (v: Viewer | null) => {
+  if (Platform.OS !== 'web') return
+  try {
+    if (v) globalThis.localStorage?.setItem(VIEWER_KEY, JSON.stringify(v))
+    else globalThis.localStorage?.removeItem(VIEWER_KEY)
+  } catch { /* storage blocked: the choice lasts this visit only */ }
+}
+
+/** A username or FID to the account: { fid, username }. */
+const lookupViewer = async (q: string): Promise<Viewer> => {
+  const res = await fetch(`${apiUrl}/api/takes/viewer?${new URLSearchParams({ q })}`, { headers: { accept: 'application/json' } })
+  const body = (await res.json().catch(() => null)) as { message?: unknown } | null
+  if (!res.ok) throw new Error(typeof body?.message === 'string' ? body.message : `That didn't work (${res.status}).`)
+  return Viewer.parse(body)
+}
 
 const Topics = z.object({ topics: z.array(z.object({ id: z.string(), name: z.string(), cards: z.number().int() })) })
 type TopicTab = z.infer<typeof Topics>['topics'][number]
@@ -71,9 +106,9 @@ const fetchTopics = async (): Promise<TopicTab[]> => {
   return Topics.parse(await res.json()).topics
 }
 
-/** `topic` null: "For you", the main feed. */
-const fetchFeed = async (topic: string | null, cursor: string | null): Promise<z.infer<typeof Feed>> => {
-  const q = new URLSearchParams({ ...(topic ? { topic } : {}), ...(cursor ? { cursor } : {}) })
+/** `topic` null: "For you", the main feed. `fid`: whose follows shape it ("Viewing as"). */
+const fetchFeed = async (topic: string | null, cursor: string | null, fid: number | null): Promise<z.infer<typeof Feed>> => {
+  const q = new URLSearchParams({ ...(topic ? { topic } : {}), ...(cursor ? { cursor } : {}), ...(fid ? { fid: String(fid) } : {}) })
   const res = await fetch(`${apiUrl}/api/takes/feed?${q}`, { headers: { accept: 'application/json' } })
   if (res.status === 401) throw new Error('This server is private. Sign in on the phone app to see the feed.')
   // The server ends a page early rather than skip cards it couldn't read; retrying resumes there.
@@ -431,12 +466,90 @@ const TopicBar = ({ value, onChange }: { value: string | null; onChange: (t: str
   )
 }
 
+const STATUS_NOTE: Record<z.infer<typeof ViewerStatus>, string | null> = {
+  ready: null,
+  personalizing: 'Still scoring some casts from people you follow.',
+  busy: 'Too many new viewers right now. Showing debates from across Farcaster; try again in a few minutes.',
+  unknown: 'No Farcaster account has that FID.',
+}
+
+/**
+ * "Viewing as": a username or FID whose follows shape "For you". Not a sign-in: follow lists
+ * are public, and anyone can view as anyone. Without one, the feed has no following lane.
+ */
+const ViewerBar = ({ viewer, status, onChange }: {
+  viewer: Viewer | null; status: z.infer<typeof ViewerStatus> | null; onChange: (v: Viewer | null) => void
+}) => {
+  const c = useColors()
+  const [editing, setEditing] = useState(viewer === null)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async () => {
+    if (!text.trim() || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      onChange(await lookupViewer(text))
+      setEditing(false)
+      setText('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const note = status ? STATUS_NOTE[status] : null
+  return (
+    <View style={{ paddingHorizontal: 16, paddingBottom: 10, gap: 6, backgroundColor: c.bg }}>
+      {viewer && !editing ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <Text style={{ color: c.muted, fontSize: 14 }}>
+            Viewing as <Text style={{ color: c.text, fontWeight: '600' }}>@{viewer.username}</Text>
+          </Text>
+          <Pressable accessibilityRole="button" onPress={() => setEditing(true)} hitSlop={6}>
+            <Text style={{ color: c.accent, fontSize: 14, fontWeight: '600' }}>Change</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: c.muted, fontSize: 14 }}>See debates from people you follow on Farcaster:</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TextInput value={text} onChangeText={setText} onSubmitEditing={() => void submit()} placeholder="@username or FID"
+              placeholderTextColor={c.muted} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Farcaster username or FID"
+              style={{ flex: 1, maxWidth: 320, color: c.text, borderColor: c.border, borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7, fontSize: 14 }} />
+            <Pressable accessibilityRole="button" onPress={() => void submit()} disabled={busy}
+              style={{ borderRadius: 999, backgroundColor: c.accent, paddingHorizontal: 14, paddingVertical: 7, opacity: busy ? 0.6 : 1 }}>
+              <Text style={{ color: c.accentText, fontSize: 14, fontWeight: '600' }}>{busy ? 'Looking…' : 'Go'}</Text>
+            </Pressable>
+            {viewer && (
+              <Pressable accessibilityRole="button" onPress={() => { setEditing(false); setError(null) }} hitSlop={6}>
+                <Text style={{ color: c.muted, fontSize: 14 }}>Cancel</Text>
+              </Pressable>
+            )}
+            {viewer && (
+              <Pressable accessibilityRole="button" onPress={() => { onChange(null); setError(null) }} hitSlop={6}>
+                <Text style={{ color: c.muted, fontSize: 14 }}>Stop</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      )}
+      {error && <Text style={{ color: c.danger ?? c.text, fontSize: 13 }}>{error}</Text>}
+      {note && !editing && <Text style={{ color: c.muted, fontSize: 13 }}>{note}</Text>}
+    </View>
+  )
+}
+
 export const DebatesScreen = () => {
   const c = useColors()
   const [topic, setTopic] = useState<string | null>(null)
+  const [viewer, setViewerState] = useState<Viewer | null>(loadViewer)
+  const setViewer = (v: Viewer | null) => { saveViewer(v); setViewerState(v) }
+  const fid = viewer?.fid ?? null
   const feed = useInfiniteQuery({
-    queryKey: ['takes', 'feed', topic],
-    queryFn: ({ pageParam }) => fetchFeed(topic, pageParam),
+    queryKey: ['takes', 'feed', topic, fid],
+    queryFn: ({ pageParam }) => fetchFeed(topic, pageParam, fid),
     initialPageParam: null as string | null,
     getNextPageParam: last => last.next,
     staleTime: 30_000,
@@ -447,7 +560,13 @@ export const DebatesScreen = () => {
     const seen = new Set<string>()
     return (feed.data?.pages ?? []).flatMap(p => p.items).filter(i => !seen.has(i.cast.hash) && (seen.add(i.cast.hash), true))
   }, [feed.data])
-  const bar = <TopicBar value={topic} onChange={setTopic} />
+  const status = feed.data?.pages[0]?.viewer?.status ?? null
+  const bar = (
+    <View style={{ backgroundColor: c.bg }}>
+      <TopicBar value={topic} onChange={setTopic} />
+      {topic === null && <ViewerBar viewer={viewer} status={status} onChange={setViewer} />}
+    </View>
+  )
   if (feed.isPending) return <View style={{ flex: 1 }}>{bar}<Loading /></View>
   if (feed.isError && items.length === 0) return <View style={{ flex: 1 }}>{bar}<Message tone="danger">{feed.error.message}</Message></View>
   const more = () => { if (feed.hasNextPage && !feed.isFetchingNextPage && !feed.isFetchNextPageError) void feed.fetchNextPage() }

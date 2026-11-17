@@ -44,6 +44,18 @@ export class Archive {
     await this.db.batch(stmts)
   }
 
+  /**
+   * Adds authors to a walk already seeded (a new viewer's follows), at the lowest priority.
+   * Authors already in the walk keep their place and progress.
+   */
+  async addAuthors(fids: readonly number[]): Promise<void> {
+    for (let i = 0; i < fids.length; i += 2000) {
+      await this.db.prepare(
+        'INSERT OR IGNORE INTO archive_authors (fid, priority) SELECT value, 0 FROM json_each(?1)',
+      ).bind(JSON.stringify(fids.slice(i, i + 2000))).run()
+    }
+  }
+
   async nextAuthors(n: number): Promise<Array<{ fid: number; pageToken: string | null }>> {
     const { results } = await this.db.prepare(
       'SELECT fid, page_token FROM archive_authors WHERE done = 0 ORDER BY priority DESC, fid LIMIT ?1',

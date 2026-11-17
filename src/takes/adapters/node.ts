@@ -5,10 +5,10 @@
 
 import { z } from 'zod'
 
-const LinksPage = z.object({
-  messages: z.array(z.object({ data: z.object({ linkBody: z.object({ targetFid: z.number().int().positive() }).optional() }) })),
-  nextPageToken: z.string().optional(),
-})
+// Messages are checked one by one: one malformed follow mustn't sink a viewer's whole list.
+// Seen live: a node returned one targetFid as the string "4294967309" among 819 numbers.
+const LinksPage = z.object({ messages: z.array(z.unknown()), nextPageToken: z.string().optional() })
+const FollowTarget = z.object({ data: z.object({ linkBody: z.object({ targetFid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }) }) })
 
 const PAGE_SIZE = 1000
 /** Bounds the read: 20,000 follows is far past any real account. */
@@ -37,7 +37,10 @@ export const readFollows = async (nodeUrls: string, fid: number): Promise<Follow
     }
     const parsed = LinksPage.safeParse(body)
     if (!parsed.success) return { ok: false, error: `linksByFid: unexpected shape: ${parsed.error.message.slice(0, 200)}` }
-    for (const m of parsed.data.messages) if (m.data.linkBody) fids.add(m.data.linkBody.targetFid)
+    for (const m of parsed.data.messages) {
+      const f = FollowTarget.safeParse(m)
+      if (f.success) fids.add(f.data.data.linkBody.targetFid)
+    }
     // The node returns an empty token, not none, on the last page.
     token = parsed.data.nextPageToken || undefined
     if (!token) return { ok: true, fids: [...fids], complete: true }
@@ -64,6 +67,33 @@ export const readUsername = async (nodeUrls: string, fid: number): Promise<{ ok:
     return { ok: true, name: name && /^[a-z0-9][a-z0-9.-]{0,63}$/i.test(name) ? name : null }
   } catch (e) {
     return { ok: false, error: `userDataByFid: ${String(e)}` }
+  }
+}
+
+const NameProof = z.object({ fid: z.number().int().positive() })
+
+/**
+ * The FID that owns a username (a Farcaster name or an ENS name), from the node's proof of it:
+ * a number, null when the node has no proof for that name, or an error. The caller passes a
+ * name already checked by parseViewerQuery; it goes in the query string, never the path.
+ */
+export const readFidByName = async (nodeUrls: string, name: string): Promise<{ ok: true; fid: number | null } | { ok: false; error: string }> => {
+  const node = nodeUrls.split(',')[0]?.trim()
+  if (!node) return { ok: false, error: 'SNAPCHAIN_URL is not set' }
+  const url = new URL('/v1/userNameProofByName', node)
+  url.searchParams.set('name', name)
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8_000) })
+    // An unknown name is a 400 (or 404) whose body says the proof wasn't found.
+    if (res.status === 400 || res.status === 404) {
+      const body = await res.text()
+      return /not\s*found/i.test(body) ? { ok: true, fid: null } : { ok: false, error: `userNameProofByName: ${res.status}` }
+    }
+    if (!res.ok) return { ok: false, error: `userNameProofByName: ${res.status}` }
+    const parsed = NameProof.safeParse(await res.json())
+    return parsed.success ? { ok: true, fid: parsed.data.fid } : { ok: false, error: 'userNameProofByName: unexpected shape' }
+  } catch (e) {
+    return { ok: false, error: `userNameProofByName: ${String(e)}` }
   }
 }
 

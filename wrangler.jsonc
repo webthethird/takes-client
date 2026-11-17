@@ -48,7 +48,9 @@
     // Writes per FID, counted after the message's signature checks out.
     { "name": "WRITE_FID", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
     // Untrusted fetches (images, link previews) across the deployment, per location: the cost guard.
-    { "name": "FETCH_ALL", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } }
+    { "name": "FETCH_ALL", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } },
+    // Takes: new "Viewing as" viewers per IP (src/takes/core/viewers.ts); an hourly cap also applies.
+    { "name": "NEW_VIEWER_IP", "namespace_id": "1005", "simple": { "limit": 1, "period": 60 } }
   ],
   // Images. Created by `pnpm media`; the media Worker
   // (wrangler.media.jsonc) serves this bucket on its own origin, set as MEDIA_ORIGIN.

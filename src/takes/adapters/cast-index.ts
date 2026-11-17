@@ -60,6 +60,16 @@ export class CastIndex {
     return results.map(r => ({ ...toCast(r), repliers: r.repliers ?? 0, likes: r.likes ?? 0 }))
   }
 
+  /** Live root casts since `since`, newest first: where a pass finds its viewers' follows' new casts. */
+  async rootsSince(since: number, minLen: number, limit: number): Promise<IndexedCast[]> {
+    const { results } = await this.db.prepare(
+      `SELECT hash, fid, ts, text, parent_hash, mentions, embeds FROM casts
+        WHERE reply = 0 AND state = 0 AND ts >= ?1 AND length(text) >= ?2
+        ORDER BY ts DESC LIMIT ?3`,
+    ).bind(since, minLen, limit).all<Row>()
+    return results.map(toCast)
+  }
+
   /** Live casts by hash; missing or deleted ones are simply absent. */
   async byHashes(hashes: readonly string[]): Promise<Map<string, IndexedCast>> {
     const out = new Map<string, IndexedCast>()

@@ -1,9 +1,10 @@
 // One scoring pass, run by the minute cron:
 //
-//   1. refresh the viewer's follows (on a TTL), then a step of the archive walk (backfill.ts)
-//   2. stage 1 on new root casts: every one from people the viewer follows, and, from the
-//      rest of the network, those that drew attention (repliers or likes); and archived casts,
-//      from before the index begins, that drew repliers
+//   1. refresh a few active viewers' follows (on a TTL), then a step of the archive walk (backfill.ts)
+//   2. stage 1 on new root casts: those from people the active viewers follow, newest viewer
+//      first (core/viewers.ts); and, from the rest of the network, those that drew attention
+//      (repliers or likes), with archived casts from before the index begins that drew repliers.
+//      The network-wide lanes keep a share of the budget (GLOBAL_FLOOR)
 //   3. stage 2 on the threads of opinion roots: each new reply's stance on the root's question
 //   4. rescore every live card
 //
@@ -14,13 +15,16 @@ import { ClaudeClassifier, isDeclined, isTransient, type Classifier } from './ad
 import { Archive, Casts } from './adapters/archive.ts'
 import { CastIndex, type IndexedCast } from './adapters/cast-index.ts'
 import { runBackfillStep, type BackfillReport } from './backfill.ts'
-import { readFollows } from './adapters/node.ts'
+import { readFollows, readUsername } from './adapters/node.ts'
 import { TakesStore, type OpinionRoot } from './adapters/store.ts'
 import { takesConfig, type Env } from './config.ts'
 import { Names } from './names.ts'
 import { runMerge, type MergeReport } from './merge.ts'
 import { cardTopics, fromAssignment, TOPIC_VERSION, type StoredTopics } from './core/topics.ts'
 import { splitEmbeds } from './core/text.ts'
+import {
+  BACKLOG_VIEWERS_PER_PASS, FOLLOW_SCAN_HOURS, MAX_ACTIVE_VIEWERS, TOUCH_EVERY, VIEWER_ACTIVE_DAYS, followsToRefresh, planStage1,
+} from './core/viewers.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
   NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces,
@@ -38,6 +42,8 @@ const CONCURRENCY = 4
  * casts classified, then the lane ran dry). 2,000 is a safety cap, not a working size.
  */
 const CANDIDATE_LIMIT = 2000
+/** FIDs per author query when scanning a viewer's follows. */
+const AUTHOR_CHUNK = 1000
 
 export type PassReport = {
   skipped?: string
@@ -48,6 +54,10 @@ export type PassReport = {
   declined: number
   scored: number
   dropped: number
+  /** Active viewers this pass (core/viewers.ts). */
+  viewers?: number
+  /** Casts this pass set out to classify, by lane (core/viewers.ts planStage1). */
+  planned?: { following: number; global: number }
   /** Markets filed under topics this pass. */
   topics?: number
   stoppedEarly?: string
@@ -110,54 +120,86 @@ export const runScoringPass = async (
       return 'stop'
     }
 
-    /* 1. Follows */
-    let follows = new Set<number>()
+    /* 1. Viewers and their follows (core/viewers.ts) */
     if (cfg.viewerFid !== null) {
-      const age = await store.followsAge(cfg.viewerFid)
-      if (age === null || now - age > FOLLOWS_TTL) {
-        const r = await readFollows(env.SNAPCHAIN_URL, cfg.viewerFid)
-        if (r.ok) await store.putFollows(cfg.viewerFid, r.fids, now)
-        else console.warn(`takes: follows for ${cfg.viewerFid} not refreshed: ${r.error}`)
+      // The deployment's own viewer is always active, so its follows keep being scored. Its
+      // username is read once, for "Viewing as" (again only while the account has none).
+      const own = await store.viewer(cfg.viewerFid)
+      if (!own?.username) {
+        const name = await readUsername(env.SNAPCHAIN_URL, cfg.viewerFid)
+        if (!own) await store.addViewer(cfg.viewerFid, name.ok ? name.name : null, now)
+        else if (name.ok && name.name) await store.setUsername(cfg.viewerFid, name.name)
       }
-      follows = await store.follows(cfg.viewerFid)
-      report.follows = follows.size
+      await store.touchViewer(cfg.viewerFid, now, TOUCH_EVERY)
     }
+    const activeSince = now - VIEWER_ACTIVE_DAYS * 86_400
+    const archiveMetaBefore = await archive.meta()
+    for (const v of followsToRefresh(await store.activeViewers(activeSince, MAX_ACTIVE_VIEWERS), now, FOLLOWS_TTL)) {
+      const r = await readFollows(env.SNAPCHAIN_URL, v.fid)
+      if (!r.ok) {
+        console.warn(`takes: follows for ${v.fid} not refreshed: ${r.error}`)
+        continue
+      }
+      const before = v.followsTs === null ? new Set<number>() : await store.follows(v.fid)
+      await store.putFollows(v.fid, r.fids, now)
+      const added = r.fids.filter(f => !before.has(f))
+      // Newly followed accounts: their recent casts haven't been looked at for this viewer, so
+      // the viewer's whole window is scanned again, and their older casts join the archive walk.
+      if (added.length > 0 && v.caughtUp) await store.setCaughtUp(v.fid, false)
+      if (added.length > 0 && archiveMetaBefore) await archive.addAuthors(added)
+    }
+    const viewers = await store.activeViewers(activeSince, MAX_ACTIVE_VIEWERS)
+    report.viewers = viewers.length
+    const follows = cfg.viewerFid === null ? new Set<number>() : await store.follows(cfg.viewerFid)
+    report.follows = follows.size
 
     /* 1b. Archive walk: node requests only, outside the Claude budget. Null once it's done. */
     const walked = await runBackfillStep({ archive, indexDb: env.DB, nodeUrls: env.SNAPCHAIN_URL, follows, now })
     if (walked) report.backfill = walked
     const archiveMeta = await archive.meta()
 
-    /* 2. Stage 1 */
+    /* 2. Stage 1: viewers' follows first, then the network-wide lanes (planStage1). */
     const freshSince = now - FRESH_HOURS * 3600
     const oldSince = now - RESURFACE_MAX_DAYS * 86_400
-    const gate = { minRepliers: MIN_REPLIERS, minLikes: MIN_LIKES, minLen: MIN_TEXT_LEN, limit: CANDIDATE_LIMIT }
-    const lanes: Array<{ lane: string; casts: IndexedCast[] }> = [
-      { lane: 'following', casts: await index.byAuthors([...follows], freshSince, MIN_TEXT_LEN, CANDIDATE_LIMIT) },
-      { lane: 'global', casts: await index.attention({ ...gate, since: freshSince, until: now + 1 }) },
-      // The 28-day scan is the expensive query; the cron runs it on a slower cadence.
-      ...(opts.includeOld ? [{ lane: 'global', casts: await index.attention({ ...gate, since: oldSince, until: freshSince }) }] : []),
-      // The archive holds what's older than the index, and gets the same two lanes over that
-      // range: follows' casts inside the fresh window (which reaches back past the index's start
-      // in a deployment younger than FRESH_HOURS), and the attention gate across all of it.
-      // Read every pass: until they're classified, this is where the budget goes.
-      ...(archiveMeta ? [
-        { lane: 'following', casts: await archive.byAuthors([...follows], freshSince, MIN_TEXT_LEN, CANDIDATE_LIMIT, PROMPT_VERSION) },
-        { lane: 'global', casts: await archive.attention({ ...gate, since: oldSince, until: archiveMeta.indexStart, promptVersion: PROMPT_VERSION }) },
-      ] : []),
-    ]
-    const seen = new Set<string>()
-    const queue: Array<{ cast: IndexedCast; lane: string }> = []
-    for (const { lane, casts } of lanes) {
-      for (const cast of casts) {
-        if (seen.has(cast.hash)) continue
-        seen.add(cast.hash)
-        queue.push({ cast, lane: follows.has(cast.fid) ? 'following' : lane })
-      }
+    const unclassified = async (xs: IndexedCast[]) => {
+      const done = await store.classified(xs.map(x => x.hash))
+      return xs.filter(x => !done.has(x.hash))
     }
-    const done = await store.classified(queue.map(q => q.cast.hash))
+    const loaded = viewers.filter(v => v.followsTs !== null)
+    // New viewers (newest first): their follows' casts across the whole fresh window, index and
+    // archive, until nothing there is left unclassified. One query each, a few viewers a pass.
+    const backlogs: IndexedCast[][] = []
+    const behind = loaded.filter(v => !v.caughtUp).sort((a, b) => b.firstSeen - a.firstSeen || a.fid - b.fid)
+    for (const v of behind.slice(0, BACKLOG_VIEWERS_PER_PASS)) {
+      const fids = [...(await store.follows(v.fid))]
+      // In chunks: a bound JSON list of thousands of FIDs would pass D1's size limits.
+      const found: IndexedCast[] = []
+      for (let i = 0; i < fids.length; i += AUTHOR_CHUNK) {
+        const chunk = fids.slice(i, i + AUTHOR_CHUNK)
+        found.push(...(await index.byAuthors(chunk, freshSince, MIN_TEXT_LEN, CANDIDATE_LIMIT)))
+        if (archiveMeta) found.push(...(await archive.byAuthors(chunk, freshSince, MIN_TEXT_LEN, CANDIDATE_LIMIT, PROMPT_VERSION)))
+      }
+      // Newest first across the chunks, as one query would have returned them.
+      const list = await unclassified(found.sort((a, b) => b.ts - a.ts || (a.hash < b.hash ? -1 : 1)).slice(0, CANDIDATE_LIMIT))
+      if (list.length === 0) await store.setCaughtUp(v.fid, true)
+      backlogs.push(list)
+    }
+    // Caught-up viewers: one scan of recent root casts, kept when any active viewer follows the author.
+    const recent = await index.rootsSince(now - FOLLOW_SCAN_HOURS * 3600, MIN_TEXT_LEN, CANDIDATE_LIMIT)
+    const followed = await store.followedBy([...new Set(recent.map(x => x.fid))], loaded.map(v => v.fid))
+    const steady = await unclassified(recent.filter(x => followed.has(x.fid)))
+    const gate = { minRepliers: MIN_REPLIERS, minLikes: MIN_LIKES, minLen: MIN_TEXT_LEN, limit: CANDIDATE_LIMIT }
+    const global = await unclassified([
+      ...(await index.attention({ ...gate, since: freshSince, until: now + 1 })),
+      // The 28-day scan is the expensive query; the cron runs it on a slower cadence.
+      ...(opts.includeOld ? await index.attention({ ...gate, since: oldSince, until: freshSince }) : []),
+      // The archive holds what's older than the index: the attention gate across all of it.
+      ...(archiveMeta ? await archive.attention({ ...gate, since: oldSince, until: archiveMeta.indexStart, promptVersion: PROMPT_VERSION }) : []),
+    ])
     // Only as many as the budget can classify this pass: names and quotes are fetched for these.
-    const todo = queue.filter(q => !done.has(q.cast.hash)).slice(0, budget)
+    const plan = planStage1({ backlogs, steady, global, budget })
+    const todo = plan.map(({ lane, ...cast }) => ({ cast: cast as IndexedCast, lane }))
+    report.planned = { following: plan.filter(x => x.lane === 'following').length, global: plan.filter(x => x.lane === 'global').length }
     const names = new Names(store, env.SNAPCHAIN_URL, now)
     const quoted = await casts.byHashes(todo.flatMap(q => (q.cast.quoted ? [q.cast.quoted.hash] : [])))
     await names.ensure([...todo.map(q => q.cast), ...quoted.values()])

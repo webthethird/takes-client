@@ -15,6 +15,16 @@ export type ScoreRow = {
   market_id: string | null
 }
 
+export type StoredViewer = {
+  fid: number; username: string | null; firstSeen: number; lastSeen: number; caughtUp: boolean
+  /** When their follow list was last read from the node; null before the first read. */
+  followsTs: number | null
+}
+type ViewerRow = { fid: number; username: string | null; first_seen: number; last_seen: number; caught_up: number; follows_ts: number | null }
+const toViewer = (r: ViewerRow): StoredViewer => ({
+  fid: r.fid, username: r.username, firstSeen: r.first_seen, lastSeen: r.last_seen, caughtUp: r.caught_up === 1, followsTs: r.follows_ts,
+})
+
 export class TakesStore {
   /**
    * A stance is where a reply lands on ONE question, so it is only valid for the stage-1 prompt
@@ -62,6 +72,65 @@ export class TakesStore {
         'INSERT INTO follows_meta (viewer, ts, count) VALUES (?1, ?2, ?3) ON CONFLICT (viewer) DO UPDATE SET ts = excluded.ts, count = excluded.count',
       ).bind(viewer, now, fids.length),
     ])
+  }
+
+  /* Viewers (core/viewers.ts) */
+
+  async viewer(fid: number): Promise<StoredViewer | null> {
+    const r = await this.db.prepare(
+      `SELECT v.fid, v.username, v.first_seen, v.last_seen, v.caught_up, m.ts AS follows_ts
+         FROM viewers v LEFT JOIN follows_meta m ON m.viewer = v.fid WHERE v.fid = ?1`,
+    ).bind(fid).first<ViewerRow>()
+    return r ? toViewer(r) : null
+  }
+
+  /** The active viewers: seen since `since`, most recent first, at most `limit`. */
+  async activeViewers(since: number, limit: number): Promise<StoredViewer[]> {
+    const { results } = await this.db.prepare(
+      `SELECT v.fid, v.username, v.first_seen, v.last_seen, v.caught_up, m.ts AS follows_ts
+         FROM viewers v LEFT JOIN follows_meta m ON m.viewer = v.fid
+        WHERE v.last_seen >= ?1 ORDER BY v.last_seen DESC, v.fid LIMIT ?2`,
+    ).bind(since, limit).all<ViewerRow>()
+    return results.map(toViewer)
+  }
+
+  /** Viewers admitted since `since`: what the hourly cap on new viewers counts. */
+  async viewersAdmittedSince(since: number): Promise<number> {
+    const r = await this.db.prepare('SELECT count(*) AS n FROM viewers WHERE first_seen >= ?1').bind(since).first<{ n: number }>()
+    return r?.n ?? 0
+  }
+
+  /** Admits a viewer; a viewer already there keeps their row (and first_seen). */
+  async addViewer(fid: number, username: string | null, now: number): Promise<void> {
+    await this.db.prepare('INSERT OR IGNORE INTO viewers (fid, username, first_seen, last_seen) VALUES (?1, ?2, ?3, ?3)')
+      .bind(fid, username, now).run()
+  }
+
+  /** Marks a visit, writing only when the last one is older than `every` seconds. */
+  async touchViewer(fid: number, now: number, every: number): Promise<void> {
+    await this.db.prepare('UPDATE viewers SET last_seen = ?2 WHERE fid = ?1 AND last_seen < ?2 - ?3').bind(fid, now, every).run()
+  }
+
+  async setUsername(fid: number, username: string): Promise<void> {
+    await this.db.prepare('UPDATE viewers SET username = ?2 WHERE fid = ?1').bind(fid, username).run()
+  }
+
+  async setCaughtUp(fid: number, caughtUp: boolean): Promise<void> {
+    await this.db.prepare('UPDATE viewers SET caught_up = ?2 WHERE fid = ?1').bind(fid, caughtUp ? 1 : 0).run()
+  }
+
+  /** Of these authors, the ones any of these viewers follow. */
+  async followedBy(authors: readonly number[], viewers: readonly number[]): Promise<Set<number>> {
+    const out = new Set<number>()
+    if (viewers.length === 0) return out
+    for (let i = 0; i < authors.length; i += CHUNK) {
+      const { results } = await this.db.prepare(
+        `SELECT DISTINCT fid FROM follows
+          WHERE fid IN (SELECT value FROM json_each(?1)) AND viewer IN (SELECT value FROM json_each(?2))`,
+      ).bind(JSON.stringify(authors.slice(i, i + CHUNK)), JSON.stringify(viewers)).all<{ fid: number }>()
+      for (const r of results) out.add(r.fid)
+    }
+    return out
   }
 
   /* Names, for rendering mentions */
