@@ -11,3 +11,12 @@ CANONICAL_ORIGIN=http://localhost:8787
 ALLOWED_FIDS=
 # Optional: `public` opens reads to anyone and sign-in to any FID, like an open Farcaster client.
 # ACCESS=public
+
+# Takes. Scoring is off without ANTHROPIC_API_KEY; merging takes into markets is off without
+# OPENAI_API_KEY. Both cost money once a scoring pass runs (see README: Costs).
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+# The server's own viewer: this FID's follows are always scored and shape "For you".
+VIEWER_FID=
+# Most Claude calls per scoring pass (default 40; 0 pauses scoring).
+# TAKES_MAX_CALLS=40
