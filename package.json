@@ -19,7 +19,8 @@
     "dev": "expo export -p web --output-dir dist && node scripts/web-headers.mjs && node scripts/offline-config.mjs && wrangler d1 migrations apply DB --local -c wrangler.offline.jsonc && wrangler d1 migrations apply TAKES --local -c wrangler.offline.jsonc && wrangler dev --local -c wrangler.offline.jsonc",
     "deploy": "node scripts/deploy.mjs",
     "dev:remote": "expo export -p web --output-dir dist && node scripts/web-headers.mjs && wrangler d1 migrations apply DB --local && wrangler dev",
-    "eval-images": "node --env-file=.dev.vars scripts/eval-images.mts"
+    "eval-images": "node --env-file=.dev.vars scripts/eval-images.mts",
+    "eval-answers": "node --env-file=.dev.vars scripts/eval-answers.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
