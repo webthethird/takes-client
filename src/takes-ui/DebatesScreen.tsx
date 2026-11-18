@@ -1,7 +1,7 @@
 // The home screen: casts ranked by how debatable they are. Each card leads with the real cast,
 // never an AI paraphrase; the derived question sits above it as the axis of disagreement.
 // A real rebuttal from someone else is shown as evidence; only when there is none does the
-// card fall back to the classifier's challenge_reason, labelled as an AI hypothesis.
+// card invite either side, with an AI question for each, labelled as AI.
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { routes } from '@warpstack/app-core'
@@ -9,7 +9,7 @@ import { Cast } from '@warpstack/contract'
 import { CastCard, ColorsOverride, Loading, Message, useColors } from '@warpstack/ui'
 import { useRouter } from 'expo-router'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
-import { ActivityIndicator, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View, type ScrollViewInstance } from 'react-native'
+import { ActivityIndicator, FlatList, Linking, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View, type ScrollViewInstance } from 'react-native'
 import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { collapseFor } from './collapse.ts'
@@ -19,8 +19,7 @@ const Item = z.object({
   cast: Cast,
   rebuttal: Cast.nullable(),
   question: z.string(),
-  challengeReason: z.string(),
-  /** AI-written replies for each side, in the cast's voice; null until written (or declined). */
+  /** AI-written questions for each side, leaning its way; null until written (or declined). */
   backSuggestion: z.string().nullable(),
   challengeSuggestion: z.string().nullable(),
   authorStance: z.enum(['yes', 'no']),
@@ -132,8 +131,7 @@ const sideCounts = (i: Item) => ({
 })
 
 /**
- * One side's reply box. A pressable, not a text field: it opens the stock composer as a reply
- * to the cast (which posts from the phone; the web composer opens but is read-only).
+ * One side's reply box. A pressable, not a text field: it replies to the cast (see useReply).
  */
 const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
   side: Side; title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
@@ -142,7 +140,7 @@ const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${title}. ${count}. ${aiHint ? 'AI-suggested angle: ' : ''}${hint}`}
+      accessibilityLabel={`${title}. ${count}. ${aiHint ? 'A question to think about, from AI: ' : ''}${hint}${IN_YOUR_CLIENT ? '. Opens the cast in your Farcaster client' : ''}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexGrow: 1, flexBasis: 150, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 12,
@@ -151,85 +149,68 @@ const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
       <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
       <Text style={{ color: c.muted, fontSize: 12 }}>{count}</Text>
       <Text style={{ color: c.muted, fontSize: 14, fontStyle: 'italic', marginTop: 2 }}>{hint}</Text>
-      {aiHint && <Text style={{ color: c.muted, fontSize: 11 }}>Suggested by AI · not a real reply</Text>}
+      {aiHint && <Text style={{ color: c.muted, fontSize: 11 }}>A question to think about · from AI</Text>}
+      {IN_YOUR_CLIENT && <Text style={{ color: c.text, fontSize: 12, marginTop: 4 }}>Reply in your Farcaster client ↗</Text>}
     </Pressable>
   )
 }
 
 /**
- * An unchallenged card ends in an invitation to either side, not a dead end and not only to
- * dissent: two equal reply boxes, side by side (stacked on narrow screens). The challenge box
- * carries the classifier's AI-written challenge_reason, labelled as such and styled as
- * placeholder text, so it never reads as a real person's reply (classifier README, "Real
- * disagreement outranks hypothesised disagreement"). The suggest stage writes one reply per
- * side in the cast's own voice; until it has, the back box asks and the challenge box shows
- * stage 1's challenge_reason.
+ * Every card ends in an invitation to either side, not a dead end and not only to dissent: two
+ * equal reply boxes, side by side (stacked on narrow screens), whether or not anyone has replied. Each box carries an
+ * AI-written question that leans toward its side, to start the reader thinking; never a reply
+ * to paste, since people should argue in their own words. Labelled as AI and styled as
+ * placeholder text, so it never reads as a real person's reply. Until the suggest stage has
+ * run, each box asks a plain question of its own instead.
  */
-/** Opens the composer as a reply to the card's cast: both sides argue with the cast itself. */
+/**
+ * The web can't post (Warpstack's web is read-only), so there Back and Challenge hand off to the
+ * visitor's own Farcaster client. forkcaster.xyz shows the cast with "Open in ..." for the clients
+ * in its open registry (Farcaster, Quilcast, Terminus, Firefly and more) and remembers the
+ * visitor's choice, so Takes keeps no client list of its own. The hash-only route redirects to
+ * the cast's page under the author's current name.
+ */
+const IN_YOUR_CLIENT = Platform.OS === 'web'
+const replyElsewhereUrl = (hash: string) => `https://forkcaster.xyz/~/conversations/${hash}`
+
+/**
+ * Replies to the card's cast: both sides argue with the cast itself. On the phone, Warpstack's
+ * composer, which posts; on the web, the cast in the visitor's own client, in a new tab.
+ */
 const useReply = (item: Item) => {
   const router = useRouter()
+  if (IN_YOUR_CLIENT) return () => { void Linking.openURL(replyElsewhereUrl(item.cast.hash)) }
   // router.push rather than <Link asChild>: Warpstack's ui notes a style array under asChild
   // reaches the DOM on the web and crashes the page.
   return () => router.push(routes.compose({ reply: { fid: item.cast.fid, hash: item.cast.hash } }))
 }
 
-/**
- * A compact side button, for cards that already show a real rebuttal: the same invitation as
- * the side boxes, in the side's colors, without the AI example text.
- */
-const SideButton = ({ side, title, count, onPress }: { side: Side; title: string; count: number; onPress: () => void }) => {
-  const c = useSidePalette(side)
-  const people = `${count} ${count === 1 ? 'person' : 'people'}`
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${title}. ${people} so far`}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: 'row', alignItems: 'center', gap: 6, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 999,
-        backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 14, paddingVertical: 7,
-      })}>
-      <Text style={{ color: c.text, fontSize: 14, fontWeight: '600' }}>{title}</Text>
-      <Text style={{ color: c.muted, fontSize: 13 }}>· {count}</Text>
-    </Pressable>
-  )
-}
-
-const SideButtons = ({ item }: { item: Item }) => {
-  const reply = useReply(item)
-  const { backing, challenging } = sideCounts(item)
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      <SideButton side={item.authorStance} title="Back this take" count={backing} onPress={reply} />
-      <SideButton side={opposite(item.authorStance)} title="Challenge it" count={challenging} onPress={reply} />
-    </View>
-  )
-}
-
 const SidePrompt = ({ item, label }: { item: Item; label: boolean }) => {
   const c = useColors()
   const reply = useReply(item)
-  const { backing } = sideCounts(item)
+  const { backing, challenging } = sideCounts(item)
+  const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} so far`
   return (
     <View style={{ gap: 8 }}>
       {label && <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {/* Each side shows an AI reply in the cast's own voice when one exists. Until then the
-            back box asks and the challenge box falls back to stage 1's challenge_reason. */}
+        {/* Each side shows an AI question leaning its way when one exists, labelled as AI. Until
+            then both boxes ask a plain question of their own, with no AI label: stage 1's
+            challenge_reason is a statement, not a question, so it isn't shown here. */}
         <SideBox
           side={item.authorStance}
           title="Back this take"
-          count={`${backing} ${backing === 1 ? 'person' : 'people'} so far`}
-          hint={item.backSuggestion ? `e.g. “${item.backSuggestion}”` : 'What makes them right?'}
+          count={people(backing)}
+          hint={item.backSuggestion ?? 'What makes them right?'}
           aiHint={item.backSuggestion !== null}
           onPress={reply}
         />
         <SideBox
           side={opposite(item.authorStance)}
           title="Challenge it"
-          count="No one yet · be the first"
-          hint={`e.g. “${item.challengeSuggestion ?? item.challengeReason}”`}
-          aiHint
+          count={challenging === 0 ? 'No one yet · be the first' : people(challenging)}
+          hint={item.challengeSuggestion ?? 'What would the other side say?'}
+          aiHint={item.challengeSuggestion !== null}
           onPress={reply}
         />
       </View>
@@ -390,8 +371,9 @@ const DebateCard = ({ item }: { item: Item }) => {
         )}
         <SideList item={item} side="challenge" count={sideCounts(item).challenging} skip={item.rebuttal?.hash ?? null} />
         <SideList item={item} side="back" count={sideCounts(item).backing} skip={null} />
-        {/* A real rebuttal replaces the AI examples, but the card still invites both sides. */}
-        {item.rebuttal && <SideButtons item={item} />}
+        {/* A card with a real rebuttal still invites both sides, with the same boxes, after the
+            people already arguing. */}
+        {item.rebuttal && <SidePrompt item={item} label={false} />}
       </View>
     </View>
   )
