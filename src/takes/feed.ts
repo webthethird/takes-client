@@ -10,7 +10,6 @@
 // presenter of our own to keep in step with Warpstack's.
 
 import { TakesStore } from './adapters/store.ts'
-import { matchCasing } from './core/text.ts'
 import { fillPage } from './core/page.ts'
 import { isFlipped, orient, tallyOn } from './core/market.ts'
 import { takesConfig, type Env } from './config.ts'
@@ -145,11 +144,7 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
     next.of >= oldLanes.following.length && next.oo >= oldLanes.others.length
 
   // An empty suggestion was declined: sent as null so the boxes fall back to static copy.
-  const cased = (cast: unknown, s: string | undefined): string | null => {
-    if (!s) return null
-    const text = (cast as { text?: unknown }).text
-    return typeof text === 'string' ? matchCasing(text, s) : s
-  }
+  const question = (s: string | undefined): string | null => s || null
   const [suggestions, markets] = await Promise.all([
     store.suggestionsFor(kept.map(h => h.row.hash), SUGGEST_VERSION),
     store.marketsOf(kept.map(h => h.row.hash)),
@@ -192,9 +187,8 @@ export const takesFeed = async (req: Request, env: Env, ctx: ExecutionContext, w
       rebuttal: rebuttal === 'gone' ? null : rebuttal,
       question: row.question,
       challengeReason: row.challenge_reason,
-      // Casing is matched here, at read time, so a casing-rule change needs no regeneration.
-      backSuggestion: cased(cast, suggestions.get(row.hash)?.back),
-      challengeSuggestion: cased(cast, suggestions.get(row.hash)?.challenge),
+      backSuggestion: question(suggestions.get(row.hash)?.back),
+      challengeSuggestion: question(suggestions.get(row.hash)?.challenge),
       authorStance: row.author_stance,
       bothSides: row.both_sides === 1,
       yesAuthors: row.yes_authors,

@@ -11,7 +11,6 @@
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { ClaudeClassifier, isDeclined } from '../src/takes/adapters/claude.ts'
-import { matchCasing } from '../src/takes/core/text.ts'
 import { TOPICS } from '../src/takes/core/topics.ts'
 
 const args = process.argv.slice(2)
@@ -63,7 +62,7 @@ const topicOf = async (k: (typeof cases)[number], images: boolean) => {
 const suggestOf = async (k: (typeof cases)[number], images: boolean) => {
   try {
     const r = await c.suggest({ text: k.text, question: k.question, answer: k.answer, ...(images ? { images: k.images } : {}) })
-    return isDeclined(r) ? `declined: ${r.reason}` : `back: "${matchCasing(k.text, r.back)}"\n  - challenge: "${matchCasing(k.text, r.challenge)}"`
+    return isDeclined(r) ? `declined: ${r.reason}` : `back: "${r.back}"\n  - challenge: "${r.challenge}"`
   } catch (e) { return `ERROR ${String(e).slice(0, 200)}` }
 }
 

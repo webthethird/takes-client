@@ -8,8 +8,9 @@
 //   3. stage 2 on the threads of opinion roots: each new reply's stance on the root's question
 //   4. rescore every live card
 //
-// Claude calls share one budget per pass, spent in that order of priority. Anything left
-// over waits for the next minute. Transient API errors end the pass early; nothing is lost.
+// Claude calls share one budget per pass, spent in that order of priority, except that a share
+// is held back for live cards that lack suggestions (SUGGEST_SHARE). Anything left over waits
+// for the next minute. Transient API errors end the pass early; nothing is lost.
 
 import { ClaudeClassifier, isDeclined, isTransient, type Classifier } from './adapters/claude.ts'
 import { Archive, Casts } from './adapters/archive.ts'
@@ -27,7 +28,7 @@ import {
 } from './core/viewers.ts'
 import {
   CHALLENGE_BAND, FRESH_HOURS, MAX_REPLIES_PER_THREAD, MAX_THREAD_DEPTH, MIN_LIKES, MIN_REPLIERS, MIN_TEXT_LEN,
-  NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces,
+  NO_MARKET, PROMPT_VERSION, RESURFACE_MAX_DAYS, STANCE_VERSION, SUGGEST_VERSION, anchorToRoot, chooseClaim, gatedChallenge, resurfaces, suggestReserve,
   reconcileStance, scoreCard,
 } from './core/score.ts'
 
@@ -56,6 +57,8 @@ export type PassReport = {
   dropped: number
   /** Active viewers this pass (core/viewers.ts). */
   viewers?: number
+  /** Calls held back for suggestions before classification (core/score.ts suggestReserve). */
+  reserved?: number
   /** Casts this pass set out to classify, by lane (core/viewers.ts planStage1). */
   planned?: { following: number; global: number }
   /** Markets filed under topics this pass. */
@@ -196,8 +199,12 @@ export const runScoringPass = async (
       // The archive holds what's older than the index: the attention gate across all of it.
       ...(archiveMeta ? await archive.attention({ ...gate, since: oldSince, until: archiveMeta.indexStart, promptVersion: PROMPT_VERSION }) : []),
     ])
+    // Held back for live cards that lack suggestions (2c), so a backlog of new casts can't keep
+    // visible cards on their fallback text. Classification and merging stop short of it.
+    const reserve = suggestReserve(await store.unsuggestedCount(SUGGEST_VERSION), budget)
+    report.reserved = reserve
     // Only as many as the budget can classify this pass: names and quotes are fetched for these.
-    const plan = planStage1({ backlogs, steady, global, budget })
+    const plan = planStage1({ backlogs, steady, global, budget: budget - reserve })
     const todo = plan.map(({ lane, ...cast }) => ({ cast: cast as IndexedCast, lane }))
     report.planned = { following: plan.filter(x => x.lane === 'following').length, global: plan.filter(x => x.lane === 'global').length }
     const names = new Names(store, env.SNAPCHAIN_URL, now)
@@ -229,7 +236,8 @@ export const runScoringPass = async (
     }), CONCURRENCY)
 
     /* 2b. Merge: place new claims in canonical markets (shares the Claude budget). */
-    if (!stop) report.merge = await runMerge({ store, classifier, openaiKey: cfg.openaiKey, since: oldSince, now, spend, fail })
+    const spendKeepingReserve = () => budget > reserve && spend()
+    if (!stop) report.merge = await runMerge({ store, classifier, openaiKey: cfg.openaiKey, since: oldSince, now, spend: spendKeepingReserve, fail })
 
     /* 3. Stage 2: fresh roots, and older ones good enough to resurface. Best band first. */
     const opinions = await store.opinionRoots(oldSince)
@@ -243,8 +251,9 @@ export const runScoringPass = async (
     const rootCasts = await casts.byHashes(roots.map(r => r.hash))
     const live = roots.filter(r => rootCasts.has(r.hash))
     const gone = roots.filter(r => !rootCasts.has(r.hash)).map(r => r.hash)
-    /* 2c. Suggest: a reply for each side, in the cast's voice, for cards that lack one. Shares
-       the budget, ahead of stage 2: a card shows its suggestions before it has any replies. */
+    /* 2c. Suggest: a question for each side, leaning its way, for cards that lack one, best
+       first. Spends the reserve held back above, then shares what's left, ahead of stage 2: a
+       card shows its suggestions before it has any replies. */
     const done2 = await store.suggested(live.map(r => r.hash), SUGGEST_VERSION)
     const need = live.filter(r => !done2.has(r.hash))
     if (need.length > 0 && !stop && budget > 0) {
@@ -262,8 +271,7 @@ export const runScoringPass = async (
             await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: '', challenge: '', register: r.reason, now })
             return 'ok'
           }
-          // Stored as the model wrote them; casing is matched to the cast when the feed is served.
-          await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: r.back, challenge: r.challenge, register: r.register, now })
+          await store.putSuggestion({ hash: root.hash, version: SUGGEST_VERSION, back: r.back, challenge: r.challenge, register: r.language, now })
           report.suggested++
           return 'ok'
         } catch (e) {

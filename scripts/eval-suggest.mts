@@ -1,6 +1,7 @@
-// Eval for the suggest stage: does each side's suggestion read like the original cast's voice?
-// Prints every suggestion for reading (tone is a judgment), plus mechanical checks that catch
-// the obvious misses: language, all-lowercase casing, emoji, length, and a short insult list.
+// Eval for the suggest stage: is each side's suggestion a short question that leans toward its
+// side, rather than an argument someone could paste as their reply? Prints every question with
+// both sides stated, for reading (which way a question leans is a judgment), plus mechanical
+// checks that catch the obvious misses.
 //
 //   pnpm eval-suggest [cases.jsonl]     (one Claude call per case)
 //
@@ -8,12 +9,12 @@
 
 import { readFileSync } from 'node:fs'
 import { ClaudeClassifier } from '../src/takes/adapters/claude.ts'
-import { matchCasing } from '../src/takes/core/text.ts'
 
 type Case = { text: string; question: string; answer: 'yes' | 'no' }
 const BUILT_IN: Case[] = [
   { text: 'My most controversial take is that the only thing ketchup is ideal for is hot dogs', question: 'Is ketchup ideal for anything besides hot dogs?', answer: 'no' },
   { text: 'ngl $DEGEN tipping is the only reason i still open this app every morning 🎩🎩', question: 'Is $DEGEN tipping good for Farcaster?', answer: 'yes' },
+  { text: 'Een vermogensbelasting jaagt ondernemers het land uit. Dat is geen mening, dat is wat er gebeurt.', question: 'Should the Netherlands tax wealth?', answer: 'no' },
 ]
 const file = process.argv[2]
 const extra: Case[] = file ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as Case) : []
@@ -24,39 +25,34 @@ if (!key) { console.error('ANTHROPIC_API_KEY is not set (expected in .dev.vars)'
 const c = new ClaudeClassifier(key)
 
 const EMOJI = /\p{Extended_Pictographic}/u
-const DUTCH = /\b(de|het|een|en|niet|van|wat|dat|maar|ook)\b/i
+const DUTCH = /\b(de|het|een|en|niet|van|wat|welke|dat|maar|ook|geen|is|er|als|zou|zouden|hoe|waarom)\b/i
 const INSULTS = /\b(idiot|stupid|moron|clown|loser|dumb|retard|shill)\b/i
-const lower = (s: string) => s === s.toLowerCase()
-const startsUpper = (s: string) => /^\p{Lu}/u.test(s.trim())
-const startsLower = (s: string) => /^\p{Ll}/u.test(s.trim())
+/** First person, or a verdict on the caster: an argument, not a question. */
+const ARGUES = /\b(I|I'm|I've|my|we|our)\b|\byou'?re (right|wrong)\b/i
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
-/** Consistently sentence-cased: at least two sentence or line starts, all capitalized. "Lol network school ..." is not. */
-const sentenceCased = (s: string) => {
-  const starts = s.split(/(?:[.!?]+\s+|\n+)/).map(x => x.trim()).filter(x => /^\p{L}/u.test(x))
-  return starts.length >= 2 && starts.every(x => /^\p{Lu}/u.test(x))
-}
-const sentences = (s: string) => s.split(/[.!?]+(?:\s|$)/).filter(x => x.trim().length > 0).length
-const OPENER = /^\s*(agreed?|fair|disagree|makes sense|good point|this\b|exactly|hot take|respectfully|i see it differently|eens|ik zie het anders)/i
+const firstWord = (s: string) => s.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
 
-const rows = await Promise.all(CASES.map(async k => ({ k, r: await c.suggest(k) })))
+const rows = await Promise.all(CASES.map(async k => {
+  try { return { k, r: await c.suggest(k) } } catch (e) { return { k, r: { declined: true as const, reason: `ERROR ${String(e).slice(0, 200)}` } } }
+}))
 let flags = 0
 for (const { k, r } of rows) {
   console.log(`\nCAST  ${k.text.replace(/\n+/g, ' / ').slice(0, 160)}`)
+  console.log(`  question:  ${k.question} (caster: ${k.answer})`)
   if ('declined' in r) { console.log(`  DECLINED: ${r.reason}`); flags++; continue }
-  console.log(`  register:  ${r.register}`)
-  // As production stores them: casing enforced after generation.
-  for (const [side, s] of [['back', matchCasing(k.text, r.back)], ['challenge', matchCasing(k.text, r.challenge)]] as const) {
+  console.log(`  language:  ${r.language}  |  caster: ${r.caster_side}  |  other: ${r.other_side}`)
+  for (const [side, s] of [['back', r.back], ['challenge', r.challenge]] as const) {
     const issues: string[] = []
-    if (DUTCH.test(k.text) && DUTCH.test(k.text.split(' ').slice(0, 8).join(' ')) && !DUTCH.test(s)) issues.push('not Dutch')
-    if (lower(k.text) && !lower(s)) issues.push('not lowercase')
-    else if (startsLower(k.text) && !startsLower(s) && !/^[$@#\d]/.test(s)) issues.push('capitalized a lowercase cast')
-    if (!EMOJI.test(k.text) && EMOJI.test(s)) issues.push('added emoji')
-    if (words(s) > Math.min(Math.max(1.5 * words(k.text), 22), 40) || sentences(s) > 2) issues.push(`long (${words(s)} vs ${words(k.text)} words, ${sentences(s)} sentences)`)
-    if (sentenceCased(k.text) && !startsUpper(s) && !/^[$@#\d]/.test(s)) issues.push('lowercased a sentence-cased cast')
-    if (OPENER.test(s)) issues.push('template opener')
+    if (!s.trim().endsWith('?')) issues.push('not a question')
+    if ((s.match(/\?/g) ?? []).length > 1 || /[.!]\s+\S/.test(s)) issues.push('more than one sentence')
+    if (words(s) > 14) issues.push(`long (${words(s)} words)`)
+    if (ARGUES.test(s)) issues.push('first person or verdict')
+    if (DUTCH.test(k.text.split(' ').slice(0, 8).join(' ')) && /\b(een|het|de)\b/i.test(k.text) && !DUTCH.test(s)) issues.push('not Dutch')
+    if (EMOJI.test(s)) issues.push('emoji')
     if (INSULTS.test(s)) issues.push('insult word')
     flags += issues.length
     console.log(`  ${side.padEnd(9)}  ${s}${issues.length ? `   <-- ${issues.join(', ')}` : ''}`)
   }
+  if (firstWord(r.back) === firstWord(r.challenge)) { console.log('  <-- both start the same way'); flags++ }
 }
-console.log(`\n${CASES.length} cases, ${flags} mechanical flags (tone itself: read above)`)
+console.log(`\n${CASES.length} cases, ${flags} mechanical flags (which way each question leans: read above)`)

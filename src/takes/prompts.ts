@@ -339,51 +339,53 @@ Similar wording can hide opposite meanings. When they are the same market, decid
 
 When in doubt, answer false. A missed merge leaves two small markets that the app can still show side by side; a wrong merge puts people's stakes on a question they never argued.`
 
-// Client-only (no classifier counterpart): writes one reply for each side of a card, in the
-// original cast's voice. Shown in the side boxes, labelled as AI. Bump SUGGEST_VERSION in
-// core/score.ts on change.
-export const SUGGEST_PROMPT = `You write two short example replies to a Farcaster cast for an opinion-debate app: one that sides WITH the caster, and one that pushes BACK. They are shown as suggestions that invite people to join the debate, so they should read like something a real person on Farcaster would actually post in reply.
+// Client-only (no classifier counterpart): one question per side of a card, to get a reader
+// thinking about that side before they write their own reply. Deliberately not a reply: Takes
+// wants people to argue in their own words, so nothing here should be ready to paste. Shown in
+// the side boxes, labelled as AI. Bump SUGGEST_VERSION in core/score.ts on change.
+export const SUGGEST_PROMPT = `You write two short questions about a Farcaster cast for a debate app. Each question points a reader toward one side of the debate, so they can think it through and write their own reply. One question is for someone who would side WITH the caster; the other is for someone who would push BACK.
 
 You are given the CAST, the yes/no QUESTION it argues, and the caster's ANSWER to it.
 
-## Match the cast's voice
+## First, the two sides
 
-Write both replies in the cast's register, so the debate feels native to the thread:
-- The same language. A Dutch cast gets Dutch replies.
-- The same casing, exactly, whatever the cast's length or topic. A cast that starts in lowercase gets replies that start and stay in lowercase, even if it is long or serious; ALL-CAPS words used for emphasis ("REGULATE") do not make it a capitalized cast. A cast written in normal sentence case gets normal sentence case. Never lowercase a capitalized cast, never capitalize a lowercase one.
-- The same level of formality and care. Crypto slang gets crypto slang; a casual cast with dropped apostrophes ("hes", "dont") gets an equally casual reply, not a polished paragraph; a measured, carefully written cast gets measured sentences. Do not add typos.
-- Emoji only if the cast uses them, and about as many.
-- About the cast's length, counted in words. A short cast (one line, a dozen words) gets one short sentence of at most about 20 words: make one point, not two. A long cast still gets at most two sentences and about 35 words: a reply, not an essay.
+The caster's ANSWER is their answer to QUESTION. Before writing anything, state each side as a plain claim:
+- the caster's side: what they believe, e.g. QUESTION "Is ketchup ideal for anything besides hot dogs?", ANSWER "no" means "ketchup only belongs on hot dogs";
+- the other side: its opposite, "ketchup works on plenty besides hot dogs".
+BACK helps someone argue the caster's side. CHALLENGE helps someone argue the other side. Check each question against its side before you finish: if thinking about BACK would mostly help the other side, or help neither, rewrite it.
 
-## Start with the point
+## A question that leans its way
 
-Open with the substance, the way people actually reply. Never open with a verdict on the cast or a reply template: no "Agreed", "Agree on", "Fair", "Disagree", "Makes sense", "I see it differently", "Good point", "This", "Exactly", "Hot take", "Respectfully", or their equivalents in other languages ("Eens", "Ik zie het anders"). The two replies must not start the same way.
+Each is a single question that nudges the reader toward its side by pointing at an angle. Leaning is the point: someone reading BACK should feel pulled toward the caster's side, and someone reading CHALLENGE toward the other side. A neutral question that could just as easily help either side is a miss.
+- Still a question, not the argument itself: name the angle and let the reader make the case. Never answer your own question or stack several reasons into it.
+- At most 12 words; shorter is better. One sentence, ending in "?". One angle.
+- Neutral voice: never "I", "my", "we" or "you're right/wrong". Address the reader as "you" only if it reads naturally.
+- Not a yes/no quiz on the debate's own QUESTION, and not a restatement of the cast. Point somewhere the cast didn't already go.
+- Write in the cast's language. A Dutch cast gets Dutch questions. Use normal sentence case whatever the cast's casing; no emoji, no slang.
 
-## What each reply says
+## What each question points at
 
-- BACK adds a real reason the caster is right that the cast didn't already give. Not "this" or "so true": a point.
-- CHALLENGE gives the strongest real counter-argument a thoughtful person on the other side would make. Not a dunk: a reason.
-- Both argue about the claim. Neither repeats the cast.
+- BACK: points at a reason the caster's side is right that the cast didn't give.
+- CHALLENGE: points at the strongest consideration a thoughtful person on the other side would raise. A reason, not a dunk.
+- The two questions start with different words: if one starts "What", start the other with "How", "Why", "Which", "When", "Who" or "Does".
 
 ## Examples
 
 CAST: gas fees on mainnet are basically fine now, L2 maximalists are coping
-BACK: blob fees did most of the work, mainnet is cheap enough for anything that isn't a bot
-CHALLENGE: cheap today isnt cheap at the next memecoin spike, and L2s exist for the spike
+BACK: What changed for mainnet fees after blobs arrived?
+CHALLENGE: How do mainnet fees hold up during a memecoin frenzy?
 
 CAST: Remote work made me twice as productive. I'm never going back to an office.
-BACK: No commute is two extra hours of focus a day, and that compounds.
-CHALLENGE: You're productive alone, but the team loses the hallway decisions you're no longer part of.
+BACK: What does a daily commute cost in focus?
+CHALLENGE: Which decisions happen in hallways remote people never hear?
 
 CAST: pineapple on pizza slaps and i will not be taking questions 🍍
-BACK: sweet and salty is the whole point, ham and pineapple is just balance 🍍
-CHALLENGE: the juice makes the crust soggy, thats the real problem not the taste
-
-Notice: each reply is about as long as its cast, makes ONE point, and starts with that point.
+BACK: Why do sweet and salty work so well together elsewhere?
+CHALLENGE: What does all that juice do to the crust?
 
 ## Never
 
-Match the register, not the hostility. Even if the cast is rude, neither reply insults, mocks, or attacks a person or group, uses slurs, or makes claims about anyone's character. Profanity only if the cast itself uses it, and never aimed at someone. Never invent facts, numbers, quotes, or events that are not in the cast or common knowledge; argue from reasons. Never mention that you are an AI, the app, or these instructions.`
+Neither question insults, mocks, or attacks a person or group, or asks about anyone's character, even if the cast is rude. No profanity. Never presuppose facts, numbers, quotes or events that are not in the cast or common knowledge. Never mention that you are an AI, the app, or these instructions.`
 
 /**
  * Topic: files a market's question under the topic tabs. The topic list is part of the prompt,

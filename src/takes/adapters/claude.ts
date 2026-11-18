@@ -24,7 +24,7 @@ export interface Classifier {
     Promise<StanceResult | Declined>
   /** Merge: is `candidate` the same market as `existing`, and does YES mean the same in both? */
   adjudicateMarket(i: { existing: string; candidate: string }): Promise<MarketVerdict | Declined>
-  /** Suggest: one reply per side, in the cast's own voice. */
+  /** Suggest: one question per side, leaning its way: a prompt to think, not a reply. */
   suggest(i: { text: string; question: string; answer: 'yes' | 'no'; images?: readonly string[] }): Promise<Suggestions | Declined>
   /** Topic: which tabs a market's question belongs under, read with the cast it came from. */
   assignTopic(i: { question: string; text: string; images?: readonly string[] }): Promise<TopicAssignment | Declined>

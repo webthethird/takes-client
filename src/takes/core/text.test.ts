@@ -39,31 +39,6 @@ describe('parsing index columns', () => {
   })
 })
 
-import { isLowercaseStyle, matchCasing } from './text.ts'
-
-describe('matchCasing', () => {
-  const taxes = 'okay comparing taxes with splitting the bill between salad and lobster makes no fucking sense\n\neveryone gets the same quality of services and those who have more must pay more'
-  it('lowercases replies to a lowercase cast (the live miss), keeping acronyms, names and tokens', () => {
-    expect(matchCasing(taxes, 'Progressive rates hit a Nurse harder than DeFi whales or the IRS thinks, says @dwr about $DEGEN.'))
-      .toBe('progressive rates hit a nurse harder than DeFi whales or the IRS thinks, says @dwr about $DEGEN.')
-    expect(matchCasing(taxes, 'I think so')).toBe('i think so')
-  })
-  it('treats ALL-CAPS emphasis as neither style, and judges by sentence starts', () => {
-    expect(isLowercaseStyle('even the people working on AI dont understand it, but lawmakers are supposed to REGULATE it? (and on what grounds?)')).toBe(true)
-    expect(isLowercaseStyle('Lol network school turning into slop')).toBe(false)
-    expect(isLowercaseStyle('Valuing a startup on cash flows is a category error. A startup has no cash flows.')).toBe(false)
-  })
-  it('capitalizes sentence starts in replies to a sentence-cased cast (the live Navarro miss)', () => {
-    const navarro = 'Its all fun and games till Trump rams Navarro through before new senate seats.\n\nAs bad as Lutnick is, Navarro is hilariously exponential'
-    expect(matchCasing(navarro, "lutnick's cantor history is a real problem. navarro is just loud"))
-      .toBe("Lutnick's cantor history is a real problem. Navarro is just loud")
-    expect(matchCasing('Remote work made me productive. I am never going back.', 'No commute is two extra hours.')).toBe('No commute is two extra hours.')
-  })
-  it('leaves a reply alone when the cast has no letters to judge by', () => {
-    expect(matchCasing('🤯🤯', 'wild')).toBe('wild')
-  })
-})
-
 describe('splitEmbeds', () => {
   it('sends Farcaster-hosted and image-file links as images, everything else as links', () => {
     const r = splitEmbeds([

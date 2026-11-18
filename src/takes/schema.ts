@@ -148,25 +148,31 @@ export const MarketVerdict = z.object({
 });
 export type MarketVerdict = z.infer<typeof MarketVerdict>;
 
-// ── Suggest: a reply for each side, in the cast's own voice (client-only) ──
+// ── Suggest: a question for each side, to start a reader thinking (client-only) ──
 //
-// Field order is load-bearing: the register is described before either reply is written.
+// Field order is load-bearing: the language and both sides are stated before either question is
+// written, so each question is checked against the side it serves (live misses pointed BACK the
+// wrong way when the caster's answer was "no").
 
 export const Suggestions = z.object({
-  register: z
+  language: z
     .string()
-    .describe(
-      "A few words on the cast's voice: language, casing, punctuation, slang, emoji, length, and how heated it is. E.g. 'lowercase, terse, crypto slang, one emoji, playful' or 'Dutch, formal, long sentences, measured'.",
-    ),
+    .describe("The cast's language, in English: e.g. 'English' or 'Dutch'. Both questions are written in it."),
+  caster_side: z
+    .string()
+    .describe("The caster's side as a plain claim, from QUESTION and ANSWER: e.g. 'ketchup only belongs on hot dogs'."),
+  other_side: z
+    .string()
+    .describe("The opposite claim: e.g. 'ketchup works on plenty besides hot dogs'."),
   back: z
     .string()
     .describe(
-      "A reply that sides WITH the cast, written in that register: a real reason they are right that the cast didn't already give.",
+      "One short open question (at most 12 words) that leans toward caster_side, pointing at a reason the cast didn't give. Never answers itself.",
     ),
   challenge: z
     .string()
     .describe(
-      "A reply that pushes BACK on the cast, written in that register: the strongest real counter-argument, aimed at the claim, never at the person.",
+      "One short open question (at most 12 words) that leans toward other_side, pointing at its strongest consideration, aimed at the claim, never at the person. Never answers itself.",
     ),
 });
 export type Suggestions = z.infer<typeof Suggestions>;

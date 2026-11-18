@@ -334,9 +334,17 @@ export class TakesStore {
     return results
   }
 
-  /* Suggest: one reply per side, in the cast's voice */
+  /* Suggest: one question per side, leaning its way */
 
   /** Which of these roots already have suggestions under `version`. */
+  /** Live cards (scored last pass) with no suggestions under `version`. */
+  async unsuggestedCount(version: string): Promise<number> {
+    const r = await this.db.prepare(
+      'SELECT COUNT(*) AS n FROM scores s WHERE NOT EXISTS (SELECT 1 FROM suggestions g WHERE g.hash = s.hash AND g.version = ?1)',
+    ).bind(version).first<{ n: number }>()
+    return r?.n ?? 0
+  }
+
   async suggested(hashes: readonly string[], version: string): Promise<Set<string>> {
     const out = new Set<string>()
     for (let i = 0; i < hashes.length; i += CHUNK) {
@@ -348,6 +356,7 @@ export class TakesStore {
     return out
   }
 
+  /** `register` holds the model's note on the cast (since suggest-3, its language) or why it declined. */
   async putSuggestion(s: { hash: string; version: string; back: string; challenge: string; register: string; now: number }): Promise<void> {
     await this.db.prepare(
       'INSERT OR REPLACE INTO suggestions (hash, version, back, challenge, register, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',

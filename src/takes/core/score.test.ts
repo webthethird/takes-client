@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Claim } from '../schema.ts'
 import {
-  CHALLENGE_BAND, FEED_START, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, mergeAll, mergeFeed, pickRebuttal, rankFeed, reconcileStance, scoreCard, sideReplies, toLanes, type Lanes, type ReplyStance,
+  CHALLENGE_BAND, FEED_START, anchorToRoot, chooseClaim, decodeCursor, encodeCursor, mergeAll, mergeFeed, pickRebuttal, rankFeed, reconcileStance, scoreCard, sideReplies, suggestReserve, toLanes, type Lanes, type ReplyStance,
 } from './score.ts'
 
 const lanes = (following: string[], others: string[]): Lanes<string> => ({ following, others })
@@ -275,5 +275,21 @@ describe('onePerMarket: a market\'s casts share one card', () => {
   it('a scored cast shows its market id only when the market has other casts', () => {
     expect(scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 1, bothSides: false, takes: 2 }).marketId).toBe('0xm')
     expect(scoreCard({ fid: 1 }, claim(), [], { id: '0xm', otherAuthors: 0, bothSides: false, takes: 1 }).marketId).toBeNull()
+  })
+})
+
+describe('suggestReserve: calls held back for cards that lack suggestions', () => {
+  it('holds back as many as cards need, up to a quarter of the budget (rounded up)', () => {
+    expect(suggestReserve(3, 40)).toBe(3)
+    expect(suggestReserve(500, 40)).toBe(10)
+    expect(suggestReserve(500, 10)).toBe(3)
+  })
+  it('holds back nothing when no card needs one, or there is no budget', () => {
+    expect(suggestReserve(0, 40)).toBe(0)
+    expect(suggestReserve(5, 0)).toBe(0)
+  })
+  it('never exceeds the budget', () => {
+    expect(suggestReserve(5, 1)).toBe(1)
+    expect(suggestReserve(5, 2, 1)).toBe(2)
   })
 })

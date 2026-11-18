@@ -17,7 +17,18 @@ import type { Claim, StanceResult } from '../schema.ts'
  */
 export const PROMPT_VERSION = 'client-4:haiku-5-5' // 3: taste claims arguable (classifier 54e4220); 4: broadest question the caster argues
 /** The suggest stage's version: bump when its prompt or schema changes; suggestions are redone. */
-export const SUGGEST_VERSION = 'suggest-2:haiku-5-5' // 2: casing from the cast's start, enforced in code; 35-word cap
+export const SUGGEST_VERSION = 'suggest-3:haiku-5-5' // 2: casing enforced in code; 3: a question per side, leaning its way, not a reply
+/**
+ * Share of each pass's Claude budget held back, before classification, for live cards that lack
+ * suggestions. Without it, a backlog of new casts took every call (measured: 10 local passes,
+ * 400 calls, all classification) and visible cards kept their fallback text after a
+ * SUGGEST_VERSION bump or a pause in scoring.
+ */
+export const SUGGEST_SHARE = 0.25
+
+/** Calls to hold back for suggestions: as many as cards need, at most SUGGEST_SHARE of the budget (rounded up). */
+export const suggestReserve = (need: number, budget: number, share = SUGGEST_SHARE): number =>
+  budget <= 0 || need <= 0 ? 0 : Math.min(need, Math.ceil(budget * share), budget)
 /** Stage 2's version: bump when the stance prompt, schema or reconciliation changes. */
 export const STANCE_VERSION = 'stance-2:haiku-5-5' // 2: direct replies anchored to stage 1's answer
 
