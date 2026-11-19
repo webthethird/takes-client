@@ -132,6 +132,7 @@ const sideCounts = (i: Item) => ({
 
 /**
  * One side's reply box. A pressable, not a text field: it replies to the cast (see useReply).
+ * Titled by role (back or challenge), colored by answer, with the answer's chip to tie the two.
  */
 const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
   side: Side; title: string; count: string; hint: string; aiHint: boolean; onPress: () => void
@@ -140,13 +141,16 @@ const SideBox = ({ side, title, count, hint, aiHint, onPress }: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${title}. ${count}. ${aiHint ? 'A question to think about, from AI: ' : ''}${hint}${IN_YOUR_CLIENT ? '. Opens the cast in your Farcaster client' : ''}`}
+      accessibilityLabel={`${title}: ${answerText(side)}. ${count}. ${aiHint ? 'A question to think about, from AI: ' : ''}${hint}${IN_YOUR_CLIENT ? '. Opens the cast in your Farcaster client' : ''}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexGrow: 1, flexBasis: 150, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 12,
         backgroundColor: pressed ? c.pressed : c.bg, paddingHorizontal: 12, paddingVertical: 10, gap: 4,
       })}>
-      <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <Text style={{ color: c.text, fontSize: 15, fontWeight: '600' }}>{title}</Text>
+        <AnswerChip side={side} border={c.border} />
+      </View>
       <Text style={{ color: c.muted, fontSize: 12 }}>{count}</Text>
       <Text style={{ color: c.muted, fontSize: 14, fontStyle: 'italic', marginTop: 2 }}>{hint}</Text>
       {aiHint && <Text style={{ color: c.muted, fontSize: 11 }}>A question to think about · from AI</Text>}
@@ -238,23 +242,35 @@ const SideFrame = ({ side, children }: { side: Side; children: ReactNode }) => {
 
 const authorName = (cast: Item['cast']) => cast.author.displayName || cast.author.username || `fid:${cast.fid}`
 
-/** "<author> says Yes": which answer to the card's question a cast argues, as a chip in that side's colors. */
+const answerText = (s: Side) => (s === 'yes' ? 'Yes' : 'No')
+
+/**
+ * "Yes" or "No" in that side's colors: the key to what the colors mean, so everything colored by
+ * side either carries one or sits under one. `border` for a chip inside a side-colored box: the
+ * usual purple outline would vanish into the Yes side's fill.
+ */
+const AnswerChip = ({ side, border = SIDE_BORDER }: { side: Side; border?: string }) => {
+  const p = useSidePalette(side)
+  return (
+    <View style={{
+      backgroundColor: p.bg, borderColor: border, borderWidth: 1, borderRadius: 999,
+      paddingHorizontal: 10, paddingVertical: 2,
+    }}>
+      <Text style={{ color: p.text, fontSize: 13, fontWeight: '700' }}>{answerText(side)}</Text>
+    </View>
+  )
+}
+
+/** "<author> says Yes": which answer to the card's question a cast argues. */
 const Says = ({ cast, stance }: { cast: Item['cast']; stance: Side }) => {
   const c = useColors()
-  const side = useSidePalette(stance)
-  const answer = stance === 'yes' ? 'Yes' : 'No'
   return (
-    <View accessible accessibilityLabel={`${authorName(cast)} says ${answer}`}
+    <View accessible accessibilityLabel={`${authorName(cast)} says ${answerText(stance)}`}
       style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
       <Text style={{ color: c.muted, fontSize: 14 }}>
         <Text style={{ color: c.text, fontWeight: '600' }}>{authorName(cast)}</Text> says
       </Text>
-      <View style={{
-        backgroundColor: side.bg, borderColor: SIDE_BORDER, borderWidth: 1, borderRadius: 999,
-        paddingHorizontal: 10, paddingVertical: 2,
-      }}>
-        <Text style={{ color: side.text, fontSize: 13, fontWeight: '700' }}>{answer}</Text>
-      </View>
+      <AnswerChip side={stance} />
     </View>
   )
 }
