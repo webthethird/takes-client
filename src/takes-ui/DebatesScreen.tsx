@@ -189,7 +189,7 @@ const SidePrompt = ({ item, label }: { item: Item; label: boolean }) => {
   const c = useColors()
   const reply = useReply(item)
   const { backing, challenging } = sideCounts(item)
-  const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} so far`
+  const people = (n: number) => n === 0 ? 'No one yet · be the first' : `${n} ${n === 1 ? 'person' : 'people'} so far`
   return (
     <View style={{ gap: 8 }}>
       {label && <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>⚑ Open debate · pick a side</Text>}
@@ -208,7 +208,7 @@ const SidePrompt = ({ item, label }: { item: Item; label: boolean }) => {
         <SideBox
           side={opposite(item.authorStance)}
           title="Challenge it"
-          count={challenging === 0 ? 'No one yet · be the first' : people(challenging)}
+          count={people(challenging)}
           hint={item.challengeSuggestion ?? 'What would the other side say?'}
           aiHint={item.challengeSuggestion !== null}
           onPress={reply}
@@ -259,15 +259,18 @@ const Says = ({ cast, stance }: { cast: Item['cast']; stance: Side }) => {
   )
 }
 
-/** Another cast on the card's question: who said what, then the cast in its side's colors. */
-const OtherTake = ({ take }: { take: Take }) => {
+/**
+ * Another cast on the card's question: who said what, then the cast in its side's colors.
+ * `replyTo`: the card's cast, when this one replies to it, so it skips "Replying to a cast".
+ */
+const OtherTake = ({ take, replyTo }: { take: Take; replyTo?: string }) => {
   const scheme = useScheme()
   return (
     <View style={{ gap: 2 }}>
       <Says cast={take.cast} stance={take.answer} />
       <View style={{ marginHorizontal: -16 }}>
         <SideFrame side={take.answer}>
-          <CastCard cast={take.cast} collapse={collapseFor(take.cast.text, take.answer, scheme)} textColor={CAST_BODY[scheme][take.answer]} />
+          <CastCard cast={take.cast} threadRoot={replyTo} collapse={collapseFor(take.cast.text, take.answer, scheme)} textColor={CAST_BODY[scheme][take.answer]} />
         </SideFrame>
       </View>
     </View>
@@ -337,8 +340,21 @@ const SideList = ({ item, side, count, skip }: { item: Item; side: SideName; cou
       </Pressable>
       {open && (replies.isPending ? <ActivityIndicator color={c.muted} style={{ alignSelf: 'flex-start' }} />
         : replies.isError ? <Text style={{ color: c.muted, fontSize: 13 }}>{replies.error.message}</Text>
-        : replies.data.items.filter(r => r.cast.hash !== skip).map(r => <OtherTake key={r.cast.hash} take={{ cast: r.cast, answer }} />))}
+        : replies.data.items.filter(r => r.cast.hash !== skip).map(r => <OtherTake key={r.cast.hash} take={{ cast: r.cast, answer }} replyTo={item.cast.hash} />))}
     </View>
+  )
+}
+
+/**
+ * What Takes is, for someone who has never seen it. Above the first card rather than in the
+ * sticky bar, so it scrolls away. Worded for both platforms: the boxes say where a reply goes.
+ */
+const Intro = () => {
+  const c = useColors()
+  return (
+    <Text style={{ color: c.muted, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 }}>
+      The debates happening on Farcaster right now. Each card is one take, with the replies backing and challenging it. Reply to pick a side.
+    </Text>
   )
 }
 
@@ -359,21 +375,19 @@ const DebateCard = ({ item }: { item: Item }) => {
         {/* Directly under the cast: the market's other casts, always shown. Their heading
             stands in for the "Open debate" label, which a card in a market doesn't need. */}
         {item.market && <MarketTakes item={item} market={item.market} />}
-        {item.rebuttal ? (
+        {item.rebuttal && (
           <>
             <Text style={{ color: c.accent, fontSize: 13, fontWeight: '600' }}>Someone already disagrees</Text>
             <View style={{ marginHorizontal: -16 }}>
-              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance), scheme)} textColor={CAST_BODY[scheme][opposite(item.authorStance)]} /></SideFrame>
+              <SideFrame side={opposite(item.authorStance)}><CastCard cast={item.rebuttal} threadRoot={item.cast.hash} collapse={collapseFor(item.rebuttal.text, opposite(item.authorStance), scheme)} textColor={CAST_BODY[scheme][opposite(item.authorStance)]} /></SideFrame>
             </View>
           </>
-        ) : (
-          <SidePrompt item={item} label={!item.market} />
         )}
         <SideList item={item} side="challenge" count={sideCounts(item).challenging} skip={item.rebuttal?.hash ?? null} />
         <SideList item={item} side="back" count={sideCounts(item).backing} skip={null} />
-        {/* A card with a real rebuttal still invites both sides, with the same boxes, after the
-            people already arguing. */}
-        {item.rebuttal && <SidePrompt item={item} label={false} />}
+        {/* Every card ends the same way: the people already arguing, then a box for each side.
+            "Open debate" only where nothing above says the debate is already on. */}
+        <SidePrompt item={item} label={!item.rebuttal && !item.market} />
       </View>
     </View>
   )
@@ -523,6 +537,8 @@ const ViewerBar = ({ viewer, status, onChange }: {
   )
 }
 
+const INTRO = 'intro' as const
+
 export const DebatesScreen = () => {
   const c = useColors()
   const [topic, setTopic] = useState<string | null>(null)
@@ -553,10 +569,11 @@ export const DebatesScreen = () => {
   if (feed.isError && items.length === 0) return <View style={{ flex: 1 }}>{bar}<Message tone="danger">{feed.error.message}</Message></View>
   const more = () => { if (feed.hasNextPage && !feed.isFetchingNextPage && !feed.isFetchNextPageError) void feed.fetchNextPage() }
   return (
-    <FlatList
-      data={items}
-      keyExtractor={i => i.cast.hash}
-      renderItem={({ item }) => <DebateCard item={item} />}
+    <FlatList<Item | typeof INTRO>
+      // The intro is the list's first row, not part of its header: the header sticks.
+      data={items.length > 0 ? [INTRO, ...items] : []}
+      keyExtractor={i => i === INTRO ? 'intro' : i.cast.hash}
+      renderItem={({ item }) => item === INTRO ? <Intro /> : <DebateCard item={item} />}
       onEndReached={more}
       onEndReachedThreshold={0.6}
       ListFooterComponent={

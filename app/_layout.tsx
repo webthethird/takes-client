@@ -1,7 +1,7 @@
 import { AppProviders, routes } from '@warpstack/app-core'
 import { useAccount } from '@warpstack/client/react'
 import { BottomInset, CrashScreen, NoServerScreen, TabBar, useColors } from '@warpstack/ui'
-import { Link, Stack, useRouter, type ErrorBoundaryProps } from 'expo-router'
+import { Link, Stack, usePathname, useRouter, type ErrorBoundaryProps } from 'expo-router'
 import Constants from 'expo-constants'
 import { StatusBar } from 'expo-status-bar'
 import { Platform, Pressable, Text, View } from 'react-native'
@@ -15,25 +15,19 @@ const web = Platform.OS === 'web'
 /** The app's name, from app.json, so a renamed app changes it in one place. */
 const appName = Constants.expoConfig?.name ?? 'Warpstack'
 
-// The web build is a preview anyone can open, so it carries the warning; the phone has the
-// vault's own native screen for the phrase.
-const Banner = () => {
-  const c = useColors()
-  return (
-    <View style={{ backgroundColor: c.bg, borderTopColor: c.border, borderTopWidth: 1, paddingHorizontal: 16, paddingVertical: 8 }}>
-      <Text style={{ color: c.muted, fontSize: 13 }}>Preview: no search or image uploads yet, and images open as links. Never paste your recovery phrase here.</Text>
-    </View>
-  )
-}
-
-/** The web's header links. The phone uses the bottom tab bar instead. */
+/**
+ * The web's header links. The phone uses the bottom tab bar instead. No "Sign in": the web can't
+ * sign in yet (Warpstack signs in on the phone), so a visitor would only find a dead end there.
+ * "Debates" leads home, so it isn't shown on the home page itself.
+ */
 const Nav = () => {
   const c = useColors()
   const account = useAccount()
+  const home = usePathname() === '/'
   const link = { color: c.muted, fontSize: 14, paddingVertical: 8 }
   return (
     <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center', paddingRight: 8 }}>
-      <Link href="/" style={link}>Debates</Link>
+      {!home && <Link href="/" style={link}>Debates</Link>}
       {account.kind === 'signedIn' ? (
         <>
           <Link href="/following" style={link}>Following</Link>
@@ -41,8 +35,6 @@ const Nav = () => {
           <Link href={routes.settings()} style={link}>Settings</Link>
           <Link href={routes.compose()} style={{ ...link, color: c.accent, fontWeight: '600' }}>Post</Link>
         </>
-      ) : account.kind === 'signedOut' || account.kind === 'linking' || account.kind === 'unsupported' ? (
-        <Link href={routes.signIn()} style={{ ...link, color: c.accent, fontWeight: '600' }}>Sign in</Link>
       ) : null}
     </View>
   )
@@ -87,7 +79,7 @@ const Shell = () => {
             <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
             <Stack.Screen name="settings" options={{ title: 'Settings' }} />
           </Stack>
-          {web ? <Banner /> : <TabBar />}
+          {!web && <TabBar />}
         </View>
       </View>
     </BottomInset.Provider>
